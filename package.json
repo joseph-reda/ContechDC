@@ -1,0 +1,28 @@
+{
+  "name": "dc",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "node --watch backend/server.js",
+    "dev:all": "node backend/dev.js",
+    "build": "vite build",
+    "start": "node backend/server.js",
+    "preview": "vite preview",
+    "test": "node --test backend/test/*.test.js",
+    "migrate:legacy-projects": "node backend/import-legacy-project-data.js"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.22"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
