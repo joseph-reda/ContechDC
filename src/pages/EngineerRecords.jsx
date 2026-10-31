@@ -1189,7 +1189,7 @@ export default function EngineerRecords() {
         {/* Information Footer */}
         <div className="mt-8 bg-blue-50 border border-blue-200 rounded-xl p-4 text-center text-blue-700">
           <p>
-            Showing your records and read-only TR records for your IR/CPR projects • Including archived
+            Showing active records you own and read-only TR records for your IR/CPR projects
           </p>
         </div>
       </div>

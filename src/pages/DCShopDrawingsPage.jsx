@@ -1,5 +1,5 @@
 // src/pages/DCShopDrawingsPage.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../config";
 import { copyAllRows, copyRow } from "../excelClipboardService";
@@ -13,10 +13,11 @@ export default function DCShopDrawingsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [projectFilter, setProjectFilter] = useState("all");
   const [deptFilter, setDeptFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active");
   const [projects, setProjects] = useState([]);
   const [toast, setToast] = useState({ show: false, message: "", type: "" });
   const [actionLoading, setActionLoading] = useState(false);
+  const archiveOperation = useRef("");
 
   // التحقق من صلاحية المستخدم
   useEffect(() => {
@@ -99,7 +100,9 @@ export default function DCShopDrawingsPage() {
     }
 
     if (statusFilter !== "all") {
-      if (statusFilter === "pending") {
+      if (statusFilter === "active") {
+        filtered = filtered.filter((sd) => !sd.isArchived);
+      } else if (statusFilter === "pending") {
         filtered = filtered.filter((sd) => !sd.isDone && !sd.isArchived);
       } else if (statusFilter === "completed") {
         filtered = filtered.filter((sd) => sd.isDone && !sd.isArchived);
@@ -228,7 +231,8 @@ export default function DCShopDrawingsPage() {
   };
 
   const handleArchive = async (sd) => {
-    if (!window.confirm(`Archive ${sd.sdNo}?`)) return;
+    if (archiveOperation.current || !window.confirm(`Archive 1 record (${sd.sdNo})?\n\nThe record will be hidden from active lists and remain available in the archive.`)) return;
+    archiveOperation.current = `record:${sd.uniqueId || sd.id}`;
     setActionLoading(true);
     try {
       const res = await fetch(`${API_URL}/archive`, {
@@ -236,7 +240,6 @@ export default function DCShopDrawingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           uniqueId: sd.uniqueId || sd.id,
-          role: "dc",
           collection: "shopdrawings",
         }),
       });
@@ -250,6 +253,7 @@ export default function DCShopDrawingsPage() {
       console.error("Archive error:", error);
       showToast("Archive failed", "error");
     } finally {
+      archiveOperation.current = "";
       setActionLoading(false);
     }
   };
@@ -400,7 +404,7 @@ export default function DCShopDrawingsPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={handleCopyAll} disabled={!filteredSD.length} className="px-4 py-2 border border-purple-200 bg-white text-purple-800 rounded-lg font-medium disabled:opacity-50">Copy all matching</button>
+            <button onClick={handleCopyAll} disabled={!filteredSD.length || actionLoading} className="px-4 py-2 border border-purple-200 bg-white text-purple-800 rounded-lg font-medium disabled:opacity-50">Copy all matching</button>
             <button
               onClick={loadData}
               disabled={actionLoading}
@@ -473,10 +477,11 @@ export default function DCShopDrawingsPage() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg"
               >
-                <option value="all">All Status</option>
+                <option value="active">Active only</option>
                 <option value="pending">Pending</option>
                 <option value="completed">Completed</option>
                 <option value="archived">Archived</option>
+                <option value="all">All records</option>
               </select>
             </div>
           </div>
@@ -507,7 +512,7 @@ export default function DCShopDrawingsPage() {
               {statusFilter !== "all" && (
                 <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs rounded-full">
                   Status: {statusFilter}{" "}
-                  <button onClick={() => setStatusFilter("all")}>×</button>
+                  <button onClick={() => setStatusFilter("active")}>×</button>
                 </span>
               )}
               <button
@@ -515,7 +520,7 @@ export default function DCShopDrawingsPage() {
                   setSearchTerm("");
                   setProjectFilter("all");
                   setDeptFilter("all");
-                  setStatusFilter("all");
+                  setStatusFilter("active");
                 }}
                 className="text-sm text-purple-600 hover:text-purple-800"
               >

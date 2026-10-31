@@ -1,5 +1,6 @@
 // src/components/admin/DCModeTab.jsx
-import React, { useEffect, useState, useCallback, useMemo, memo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef, memo } from "react";
+import { archiveProjectRequests, archiveProjectRequestsConfirmation, previewProjectRequestsArchive, projectRequestArchiveKey } from "../../archiveService";
 import { API_URL } from "../../config";
 import { copyAllRows, displayedDescription } from "../../excelClipboardService";
 import { rowsInProjectTypeSection } from "../../utils/dcSections";
@@ -499,6 +500,8 @@ export default function DCModeTab({ user }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [copyingGroup, setCopyingGroup] = useState("");
+  const [archivingScope, setArchivingScope] = useState("");
+  const archiveOperation = useRef("");
   const [toast, setToast] = useState({ show: false, message: "", type: "" });
 
   // View state
@@ -804,6 +807,31 @@ export default function DCModeTab({ user }) {
     }
   };
 
+  const handleArchiveProjectRequests = async (project, requestType) => {
+    if (archiveOperation.current) return;
+    const key = projectRequestArchiveKey(project, requestType);
+    archiveOperation.current = key;
+    setArchivingScope(key);
+    setSaving(true);
+    try {
+      const preview = await previewProjectRequestsArchive(API_URL, project, requestType);
+      if (!preview.eligibleCount) {
+        showToast(`No active ${requestType} records are eligible for Project ${project}`, "warning");
+        return;
+      }
+      if (!window.confirm(archiveProjectRequestsConfirmation({ project, requestType, count: preview.eligibleCount }))) return;
+      const result = await archiveProjectRequests(API_URL, project, requestType);
+      showToast(`${result.archivedCount} ${requestType} ${result.archivedCount === 1 ? "record" : "records"} archived for Project ${project}`, "success");
+      await loadAllData();
+    } catch (error) {
+      showToast(error.message || "Archive operation failed", "error");
+    } finally {
+      archiveOperation.current = "";
+      setArchivingScope("");
+      setSaving(false);
+    }
+  };
+
   // ==============================
   // Action handlers
   // ==============================
@@ -843,8 +871,10 @@ export default function DCModeTab({ user }) {
 
   const handleArchive = async (item) => {
     const type = item.isRevision ? "revision" : item.sdNo ? "shop drawing" : "IR";
-    if (!window.confirm(`Archive ${type} ${item.irNo || item.revNo || item.sdNo}?`)) return;
+    const id = item.uniqueId || item.id;
+    if (archiveOperation.current || !window.confirm(`Archive 1 record (${type} ${item.irNo || item.revNo || item.sdNo})?\n\nThe record will be hidden from active lists and remain available in the archive.`)) return;
 
+    archiveOperation.current = `record:${id}`;
     setSaving(true);
     try {
       const collection = item.isRevision ? "revs" : item.sdNo ? "shopdrawings" : "irs";
@@ -852,8 +882,7 @@ export default function DCModeTab({ user }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          uniqueId: item.uniqueId || item.id,
-          role: "dc",
+          uniqueId: id,
           collection,
         }),
       });
@@ -868,6 +897,7 @@ export default function DCModeTab({ user }) {
       console.error("Archive error:", error);
       showToast("Failed to archive", "error");
     } finally {
+      archiveOperation.current = "";
       setSaving(false);
     }
   };
@@ -1555,6 +1585,8 @@ export default function DCModeTab({ user }) {
             renderRow={renderItemRow}
             onCopyAll={copySection}
             copyingGroup={copyingGroup}
+            onArchiveProjectRequests={activeView === "archive" ? undefined : handleArchiveProjectRequests}
+            archivingScope={archivingScope}
             loading={loading}
           />
         )}

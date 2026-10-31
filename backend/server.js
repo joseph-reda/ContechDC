@@ -32,6 +32,7 @@ const allowedDepartments = new Set(["ARCH", "Civil", "ELECT", "MECH", "SURV"]);
 const allowedRequestTypes = new Set(["ir", "cpr", "sd"]);
 const inspectionRequestTypes = new Set(["IR", "CPR", "PPIR", "TR"]);
 const creatableInspectionRequestTypes = new Set(["IR", "CPR", "TR"]);
+const projectArchiveRequestTypes = new Set(["IR", "CPR", "TR"]);
 
 function canonicalDepartment(value) {
   const raw = String(value || "").trim();
@@ -171,6 +172,49 @@ function allDocuments({ archived } = {}) {
       .filter((item) => archived === undefined || Boolean(item.isArchived) === archived)
       .map((item) => ({ ...item, collection, sourceCollection: collection, requestType: documentType(item), locationType: locationTypeFor(item, locationTypes) })),
   );
+}
+
+function projectRequestArchiveCriteria(body = {}) {
+  const requestedProject = String(body.project || "").trim();
+  if (!requestedProject) return { error: "Project is required", status: 400 };
+  const project = db.prepare("SELECT name FROM projects WHERE name = ?").get(requestedProject)?.name;
+  if (!project) return { error: "Project not found", status: 404 };
+  const requestType = String(body.requestType || "").trim().toUpperCase();
+  if (!projectArchiveRequestTypes.has(requestType)) {
+    return { error: "Request type must be IR, CPR, or TR", status: 400 };
+  }
+  return { project, requestType, label: `${requestType} records for Project ${project}` };
+}
+
+function eligibleProjectRequestArchiveItems({ project, requestType }) {
+  return listItems("irs", { includeArchived: false })
+    .filter((item) => !isPpirRecord(item))
+    .filter((item) => String(item.project || "") === project)
+    .filter((item) => documentType(item) === requestType)
+    .map((item) => ({ collection: "irs", item }));
+}
+
+function archiveItems(records, user) {
+  if (!records.length) return [];
+  const archivedAt = timestamp();
+  const archived = [];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const { collection, item } of records) {
+      archived.push(saveItem(collection, {
+        ...item,
+        isArchived: true,
+        archivedAt,
+        archivedBy: user.username,
+        archivedByRole: user.role,
+      }));
+    }
+    db.exec("COMMIT");
+    return archived;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function filterDocuments(items, query) {
@@ -993,9 +1037,25 @@ api.post("/archive", requireDocumentControl, (req, res) => {
   if (!allowedCollections.has(collection)) return res.status(400).json({ error: "Invalid collection" });
   const item = findItem(collection, req.body.uniqueId || req.body.id);
   if (!item) return res.status(404).json({ error: "Item not found" });
-  res.json({ success: true, item: saveItem(collection, {
-    ...item, isArchived: true, archivedBy: req.body.role || req.user.role, archivedAt: timestamp(),
-  }) });
+  if (item.isArchived) return res.json({ success: true, archivedCount: 0, item });
+  const [archived] = archiveItems([{ collection, item }], req.user);
+  res.json({ success: true, archivedCount: 1, item: archived });
+});
+
+api.post("/archive/project-requests", requireDocumentControl, (req, res) => {
+  const criteria = projectRequestArchiveCriteria(req.body);
+  if (criteria.error) return res.status(criteria.status).json({ error: criteria.error });
+  const eligible = eligibleProjectRequestArchiveItems(criteria);
+  if (req.body.preview === true) {
+    return res.json({ success: true, preview: true, eligibleCount: eligible.length, ...criteria });
+  }
+  const archived = archiveItems(eligible, req.user);
+  return res.json({
+    success: true,
+    archivedCount: archived.length,
+    archivedIds: archived.map((item) => item.id || item.uniqueId),
+    ...criteria,
+  });
 });
 
 api.post("/unarchive", requireDocumentControl, (req, res) => {
@@ -1006,6 +1066,7 @@ api.post("/unarchive", requireDocumentControl, (req, res) => {
   const restored = { ...item, isArchived: false };
   delete restored.archivedAt;
   delete restored.archivedBy;
+  delete restored.archivedByRole;
   res.json({ success: true, item: saveItem(collection, restored) });
 });
 
@@ -1272,11 +1333,15 @@ api.get("/excel-files/:id/download", requireDocumentControl, (req, res) => {
 });
 
 function visibleEngineerRecords(req) {
-  const ownProjects = new Set(listItems("irs")
+  const ownProjects = new Set(listItems("irs", { includeArchived: false })
     .filter((item) => ["IR", "CPR"].includes(documentType(item))
       && String(item.user || "").toLowerCase() === String(req.user.username || "").toLowerCase())
     .map((item) => item.project));
-  return [...listItems("irs"), ...listItems("revs"), ...listItems("shopdrawings")]
+  return [
+    ...listItems("irs", { includeArchived: false }),
+    ...listItems("revs", { includeArchived: false }),
+    ...listItems("shopdrawings", { includeArchived: false }),
+  ]
     .filter((item) => !isPpirRecord(item))
     .filter((item) => documentType(item) === "TR"
       ? ownProjects.has(item.project)

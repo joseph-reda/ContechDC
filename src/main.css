@@ -324,6 +324,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .dc-type-subsection-header button { flex: none; padding: 8px 13px; border: 1px solid #9fb9cc; border-radius: 8px; background: #fff; color: #163e5c; font-size: 12px; font-weight: 800; }
 .dc-type-subsection-header button:hover:not(:disabled) { background: #e3f2fc; }
 .dc-type-subsection-header button:disabled { opacity: .5; }
+.dc-type-subsection-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.dc-type-subsection-header .dc-archive-action { border-color: #e6b96d; background: #fff8e8; color: #8a4b08; }
+.dc-type-subsection-header .dc-archive-action:hover:not(:disabled) { background: #ffedc5; }
 .dc-workspace .dc-table-scroll .dc-group-row:hover { background: transparent; }
 .dc-workspace .dc-table-scroll .dc-group-row th { padding: 10px 16px; border: 0; text-align: left; color: #fff; }
 .dc-group-row th span { display: inline-block; margin-right: 12px; font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; opacity: .72; }

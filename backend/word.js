@@ -91,6 +91,20 @@ function referenceText(value) {
   return String(value || "").trim();
 }
 
+export function formatWordDate(value = new Date().toISOString()) {
+  const raw = value instanceof Date ? value.toISOString() : String(value ?? "").trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+  const businessDate = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (businessDate) return `${businessDate[3]}/${businessDate[2]}/${businessDate[1]}`;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = String(parsed.getFullYear()).padStart(4, "0");
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${day}/${month}/${year}`;
+}
+
 function refSdText(item) {
   const sources = [item.refDrawings, item.refSD, item.SDAttatch, item.sdAttachment, item.SDattach, item.sdAttach, item.tags?.sd];
   const seen = new Set();
@@ -116,7 +130,7 @@ function refSdText(item) {
 
 function contextFor(item, title) {
   const requestType = String(item.requestType || (item.isCPR ? "CPR" : "IR")).toUpperCase();
-  const date = String(item.receivedDate || item.sentAt || item.createdAt || new Date().toISOString()).slice(0, 10);
+  const date = formatWordDate(item.receivedDate || item.sentAt || item.createdAt || new Date().toISOString());
   const sheets = Array.isArray(item.sheets) ? item.sheets : [];
   const protoTypes = Array.isArray(item.protoTypes)
     ? item.protoTypes.map((entry) => entry?.type || entry).filter(Boolean).join(", ")

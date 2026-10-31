@@ -13,7 +13,8 @@ process.env.WORD_TEMPLATE_DIR = testTemplates;
 process.env.EXCEL_FILES_DIR = testTemplates;
 
 const { app } = await import("../server.js");
-const { db, saveItem } = await import("../db.js");
+const { db, findItem, saveItem, saveProject } = await import("../db.js");
+const { formatWordDate } = await import("../word.js");
 const { readZipEntries, writeZipEntries } = await import("../office-zip.js");
 const ppirTemplate = readZipEntries(fs.readFileSync(path.resolve("backend", "templates", "PPIR.docx")));
 fs.copyFileSync(path.resolve("backend", "templates", "report-register.xlsx"), path.join(testTemplates, "report-register.xlsx"));
@@ -561,7 +562,7 @@ test("account, project and request workflow works without external services", as
   const word = await request(baseUrl, "/generate-word", {
     method: "POST",
     headers: { Cookie: engineerCookie },
-    body: JSON.stringify(item),
+    body: JSON.stringify({ ...item, receivedDate: "2026-09-05" }),
   });
   assert.equal(word.status, 200);
   assert.equal(word.headers.get("content-type"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
@@ -570,6 +571,8 @@ test("account, project and request workflow works without external services", as
   assert.equal(wordBuffer.subarray(0, 2).toString(), "PK");
   const documentXml = readZipEntries(wordBuffer).find((entry) => entry.name === "word/document.xml").data.toString("utf8");
   assert.match(documentXml, /BADYA-CON-D6-A1-IR-ST-001/);
+  assert.match(documentXml, /05\/09\/2026/);
+  assert.doesNotMatch(documentXml, /2026-09-05|September|Sep(?:tember)?/i);
   assert.doesNotMatch(documentXml, /\{\{\s*(IRNo|ProjectName|Description|ReceivedDate|requestType)/);
 
   const editedReferencesResponse = await request(baseUrl, `/dc/documents/${architectureItem.id}/references`, {
@@ -604,6 +607,7 @@ test("account, project and request workflow works without external services", as
   assert.equal(dcWord.status, 200);
   const dcWordXml = readZipEntries(Buffer.from(await dcWord.arrayBuffer()))
     .find((entry) => entry.name === "word/document.xml").data.toString("utf8");
+  assert.match(dcWordXml, new RegExp(formatWordDate(architectureItem.receivedDate || architectureItem.sentAt || architectureItem.createdAt).replaceAll("/", "\\/")));
   assert.match(dcWordXml, /BADYA-SD-CON-D6-A1-ARCH-SD-ARCH-019/);
   assert.doesNotMatch(dcWordXml, /SD-ARCH-018/);
 
@@ -632,12 +636,17 @@ test("account, project and request workflow works without external services", as
   assert.equal(cprWord.headers.get("x-contech-template"), "CPR.docx");
   const cprParts = readZipEntries(Buffer.from(await cprWord.arrayBuffer()));
   assert.match(cprParts.find((entry) => entry.name === "word/document.xml").data.toString("utf8"), /Ground Floor/);
+  assert.match(cprParts.find((entry) => entry.name === "word/document.xml").data.toString("utf8"), new RegExp(formatWordDate(cpr.receivedDate || cpr.sentAt || cpr.createdAt).replaceAll("/", "\\/")));
   assert.match(cprParts.find((entry) => entry.name === "word/styles.xml").data.toString("utf8"), /w:ascii="Calibri"/);
   assert.doesNotMatch(cprParts.find((entry) => entry.name === "word/document.xml").data.toString("utf8"), /REF\.(?:Drawings|Method)/i);
   const cprChecklist = await request(baseUrl, `/dc/documents/${cpr.id}/word`, { method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ part: "checklist" }) });
   assert.equal(cprChecklist.status, 200);
   assert.equal(cprChecklist.headers.get("x-contech-template"), "CPR-CHECKLIST.docx");
-  assert.ok(readZipEntries(Buffer.from(await cprChecklist.arrayBuffer())).some((entry) => entry.name === "word/document.xml"));
+  const checklistEntries = readZipEntries(Buffer.from(await cprChecklist.arrayBuffer()));
+  assert.ok(checklistEntries.some((entry) => entry.name === "word/document.xml"));
+  const checklistXml = checklistEntries.filter((entry) => entry.name.startsWith("word/") && entry.name.endsWith(".xml"))
+    .map((entry) => entry.data.toString("utf8")).join("\n");
+  assert.match(checklistXml, new RegExp(formatWordDate(cpr.receivedDate || cpr.sentAt || cpr.createdAt).replaceAll("/", "\\/")));
 
   const trWord = await request(baseUrl, "/generate-word", {
     method: "POST",
@@ -648,6 +657,7 @@ test("account, project and request workflow works without external services", as
   assert.equal(trWord.headers.get("x-contech-template"), "TR.docx");
   const trXml = readZipEntries(Buffer.from(await trWord.arrayBuffer()))
     .find((entry) => entry.name === "word/document.xml").data.toString("utf8");
+  assert.match(trXml, new RegExp(formatWordDate(tr.receivedDate || tr.sentAt || tr.createdAt).replaceAll("/", "\\/")));
   assert.doesNotMatch(trXml, /REF\.(?:Drawings|Method)|TR-REF-DO-NOT-EXPORT|TR-METHOD-DO-NOT-EXPORT/i);
 
   const queueResponse = await request(baseUrl, "/dc/queue?type=TR&page=1&pageSize=25", {
@@ -762,4 +772,103 @@ test("account, project and request workflow works without external services", as
   const preview = await previewResponse.json();
   assert.equal(preview.sheet.name, firstSheet.name);
   assert.ok(preview.maxPreviewColumns <= 30);
+
+  const archiveSingle = saveItem("irs", {
+    id: "archive-single", uniqueId: "archive-single", irNo: "ARCHIVE-SINGLE",
+    requestType: "IR", project: "ARCHIVE-SINGLE-PROJECT", department: "Civil",
+    user: "engineer.one", isArchived: false, isDone: false, createdAt: "2026-09-05T08:00:00.000Z",
+  });
+  const singleArchiveResponse = await request(baseUrl, "/archive", {
+    method: "POST", headers: { Cookie: adminCookie },
+    body: JSON.stringify({ collection: "irs", uniqueId: archiveSingle.id, role: "spoofed-role" }),
+  });
+  assert.equal(singleArchiveResponse.status, 200);
+  const singleArchived = (await singleArchiveResponse.json()).item;
+  assert.equal(singleArchived.isArchived, true);
+  assert.equal(singleArchived.archivedBy, "testadmin");
+  assert.equal(singleArchived.archivedByRole, "admin");
+  const engineerActiveAfterArchive = await request(baseUrl, "/engineer/records/page?pageSize=200", { headers: { Cookie: engineerCookie } });
+  assert.ok((await engineerActiveAfterArchive.json()).records.every((record) => record.id !== archiveSingle.id));
+
+  saveProject({ name: "ARCHIVE-PROJECT-A", description: "Archive scope A", counters: {} });
+  saveProject({ name: "ARCHIVE-PROJECT-B", description: "Archive scope B", counters: {} });
+  saveItem("irs", { id: "archive-a-ir-1", uniqueId: "archive-a-ir-1", irNo: "ARCHIVE-A-IR-1", requestType: "IR", project: "ARCHIVE-PROJECT-A", department: "Civil", isArchived: false, createdAt: "2026-09-05T09:00:00.000Z" });
+  saveItem("irs", { id: "archive-a-ir-2", uniqueId: "archive-a-ir-2", irNo: "ARCHIVE-A-IR-2", requestType: "IR", project: "ARCHIVE-PROJECT-A", department: "Civil", isArchived: false, createdAt: "2026-09-05T09:10:00.000Z" });
+  saveItem("irs", { id: "archive-a-cpr", uniqueId: "archive-a-cpr", irNo: "ARCHIVE-A-CPR", requestType: "CPR", project: "ARCHIVE-PROJECT-A", department: "Civil", isArchived: false, createdAt: "2026-09-05T09:20:00.000Z" });
+  saveItem("irs", { id: "archive-a-tr", uniqueId: "archive-a-tr", irNo: "ARCHIVE-A-TR", requestType: "TR", project: "ARCHIVE-PROJECT-A", department: "Civil", isArchived: false, createdAt: "2026-09-05T09:30:00.000Z" });
+  saveItem("revs", { id: "archive-a-rev", uniqueId: "archive-a-rev", revNo: "ARCHIVE-A-REV", isRevision: true, project: "ARCHIVE-PROJECT-A", department: "Civil", isArchived: false, createdAt: "2026-09-05T09:40:00.000Z" });
+  saveItem("irs", { id: "archive-b-ir", uniqueId: "archive-b-ir", irNo: "ARCHIVE-B-IR", requestType: "IR", project: "ARCHIVE-PROJECT-B", department: "Civil", isArchived: false, createdAt: "2026-09-05T10:00:00.000Z" });
+  saveItem("irs", { id: "archive-b-cpr", uniqueId: "archive-b-cpr", irNo: "ARCHIVE-B-CPR", requestType: "CPR", project: "ARCHIVE-PROJECT-B", department: "Civil", isArchived: false, createdAt: "2026-09-05T10:10:00.000Z" });
+  saveItem("irs", { id: "archive-b-tr", uniqueId: "archive-b-tr", irNo: "ARCHIVE-B-TR", requestType: "TR", project: "ARCHIVE-PROJECT-B", department: "Civil", isArchived: false, createdAt: "2026-09-05T10:20:00.000Z" });
+
+  const unauthorizedProjectArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: engineerCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "IR" }),
+  });
+  assert.equal(unauthorizedProjectArchive.status, 403);
+  const missingProjectArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ requestType: "IR" }),
+  });
+  assert.equal(missingProjectArchive.status, 400);
+  const missingTypeArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A" }),
+  });
+  assert.equal(missingTypeArchive.status, 400);
+  const invalidTypeArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "SD" }),
+  });
+  assert.equal(invalidTypeArchive.status, 400);
+  const unknownProjectArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "UNKNOWN-PROJECT", requestType: "IR" }),
+  });
+  assert.equal(unknownProjectArchive.status, 404);
+  const removedGlobalArchive = await request(baseUrl, "/archive/bulk", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ scope: "all" }),
+  });
+  assert.equal(removedGlobalArchive.status, 404);
+
+  const irPreviewResponse = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "IR", preview: true }),
+  });
+  assert.equal(irPreviewResponse.status, 200);
+  assert.equal((await irPreviewResponse.json()).eligibleCount, 2);
+  assert.equal(findItem("irs", "archive-a-ir-1").isArchived, false);
+  const irArchiveResponse = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "IR" }),
+  });
+  const irArchive = await irArchiveResponse.json();
+  assert.equal(irArchiveResponse.status, 200);
+  assert.equal(irArchive.archivedCount, 2);
+  assert.deepEqual(new Set(irArchive.archivedIds), new Set(["archive-a-ir-1", "archive-a-ir-2"]));
+  assert.equal(findItem("irs", "archive-a-cpr").isArchived, false);
+  assert.equal(findItem("irs", "archive-a-tr").isArchived, false);
+  assert.equal(findItem("revs", "archive-a-rev").isArchived, false);
+  assert.equal(findItem("irs", "archive-b-ir").isArchived, false);
+
+  const cprArchiveResponse = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "CPR" }),
+  });
+  assert.equal((await cprArchiveResponse.json()).archivedCount, 1);
+  assert.equal(findItem("irs", "archive-a-cpr").isArchived, true);
+  assert.equal(findItem("irs", "archive-a-tr").isArchived, false);
+  assert.equal(findItem("irs", "archive-b-cpr").isArchived, false);
+
+  const trArchiveResponse = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "TR" }),
+  });
+  assert.equal((await trArchiveResponse.json()).archivedCount, 1);
+  assert.equal(findItem("irs", "archive-a-tr").isArchived, true);
+  assert.equal(findItem("irs", "archive-b-tr").isArchived, false);
+
+  const repeatedIrArchive = await request(baseUrl, "/archive/project-requests", {
+    method: "POST", headers: { Cookie: adminCookie }, body: JSON.stringify({ project: "ARCHIVE-PROJECT-A", requestType: "IR" }),
+  });
+  assert.equal((await repeatedIrArchive.json()).archivedCount, 0);
+  const projectAActive = await request(baseUrl, "/dc/queue?project=ARCHIVE-PROJECT-A&pageSize=100", { headers: { Cookie: adminCookie } });
+  assert.deepEqual((await projectAActive.json()).items.map((record) => record.id), ["archive-a-rev"]);
+  const projectBActive = await request(baseUrl, "/dc/queue?project=ARCHIVE-PROJECT-B&pageSize=100", { headers: { Cookie: adminCookie } });
+  assert.deepEqual(new Set((await projectBActive.json()).items.map((record) => record.id)), new Set(["archive-b-ir", "archive-b-cpr", "archive-b-tr"]));
+  const archiveRegister = await request(baseUrl, "/archive/dc?pageSize=100", { headers: { Cookie: adminCookie } });
+  const archivedIds = new Set((await archiveRegister.json()).archive.map((record) => record.id));
+  for (const id of ["archive-a-ir-1", "archive-a-ir-2", "archive-a-cpr", "archive-a-tr"]) assert.ok(archivedIds.has(id));
+  for (const id of ["archive-b-ir", "archive-b-cpr", "archive-b-tr", "archive-a-rev"]) assert.equal(archivedIds.has(id), false);
 });
