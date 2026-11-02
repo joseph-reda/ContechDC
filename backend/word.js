@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { checklistLocationCode, validateChecklistSelection } from "./checklists.js";
 import { decodeXml, encodeXml, readZipEntries, writeZipEntries } from "./office-zip.js";
+import { normalizeChecklistDepartment } from "../src/utils/checklistDepartments.js";
 
 const backendDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(backendDirectory, "..");
@@ -31,7 +33,12 @@ const shopDrawingTemplates = {
 };
 
 function normalizeDepartment(value) {
-  const department = String(value || "ST").trim().toUpperCase();
+  const checklistDepartment = normalizeChecklistDepartment(value);
+  if (checklistDepartment === "ARCH") return "ARCH";
+  if (checklistDepartment === "ST") return "ST";
+  if (checklistDepartment === "MEP") return "MECH";
+  if (checklistDepartment === "ELEC") return "ELECT";
+  const department = String(value || "ST").trim().replace(/\s+/g, " ").toUpperCase();
   if (department.includes("ARCH")) return "ARCH";
   if (department.includes("ELECT")) return "ELECT";
   if (department.includes("MECH") || department.includes("MEP")) return "MECH";
@@ -49,17 +56,7 @@ function configuredTemplateDirectories() {
   ].filter(Boolean);
 }
 
-function resolveTemplate(item, part = "main") {
-  if (part === "checklist") {
-    const configured = process.env.CPR_CHECKLIST_TEMPLATE;
-    const candidates = [
-      configured && path.resolve(projectDirectory, configured),
-      ...configuredTemplateDirectories().map((directory) => path.join(directory, "CPR-CHECKLIST.docx")),
-    ].filter(Boolean);
-    const filename = candidates.find((candidate) => fs.existsSync(candidate));
-    if (!filename) throw new Error("CPR checklist template is not configured");
-    return { path: filename, name: "CPR-CHECKLIST.docx", directory: path.dirname(filename) };
-  }
+function resolveTemplate(item) {
   const department = normalizeDepartment(item.department || item.deptAbbr);
   const isShopDrawing = Boolean(item.sdNo || Array.isArray(item.sheets));
   const requestType = String(item.requestType || (item.isCPR ? "CPR" : "IR")).toUpperCase();
@@ -158,6 +155,8 @@ function contextFor(item, title) {
     receiveddate: date,
     date,
     location: item.location || "",
+    level: checklistLocationCode(item.location),
+    generalsubject: item.category || item.subject || description,
     currentdate: date,
     todaydate: date,
     requesttype: requestTitles[requestType] || title || requestType,
@@ -194,7 +193,10 @@ function replaceParagraphPlaceholders(paragraphXml, context) {
     cursor += node.text.length;
   }
   const combined = nodes.map((node) => node.text).join("");
-  const placeholders = [...combined.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)];
+  // Some of the approved checklist files contain a legacy single opening
+  // brace (for example, "{ ReceivedDate}}"). Accept that narrow variant so
+  // the source template can remain unchanged while still filling the field.
+  const placeholders = [...combined.matchAll(/\{\{?\s*([^{}]+?)\s*\}\}/g)];
   if (placeholders.length === 0) return paragraphXml;
 
   const nodeTexts = nodes.map((node) => node.text);
@@ -254,6 +256,296 @@ function applyCalibri(xml, name) {
   return xml.replace(/<w:rFonts\b[^>]*\/?\s*>/g, calibriFonts);
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function xmlAttribute(fragment, name) {
+  return new RegExp(`\\b${escapeRegExp(name)}="([^"]*)"`).exec(fragment)?.[1] || "";
+}
+
+function replaceXmlAttribute(fragment, name, value) {
+  const pattern = new RegExp(`(\\b${escapeRegExp(name)}=")[^"]*(")`);
+  return pattern.test(fragment)
+    ? fragment.replace(pattern, `$1${encodeXml(value)}$2`)
+    : fragment.replace(/\s*\/>$/, ` ${name}="${encodeXml(value)}"/>`);
+}
+
+function mergeRootNamespaces(baseXml, sourceXml, rootName) {
+  const rootPattern = new RegExp(`<${escapeRegExp(rootName)}\\b[^>]*>`);
+  const baseRoot = rootPattern.exec(baseXml)?.[0];
+  const sourceRoot = rootPattern.exec(sourceXml)?.[0];
+  if (!baseRoot || !sourceRoot) return baseXml;
+  let mergedRoot = baseRoot;
+  const existing = new Set([...baseRoot.matchAll(/\s(xmlns(?::[\w.-]+)?)="[^"]*"/g)].map((match) => match[1]));
+  for (const match of sourceRoot.matchAll(/\s(xmlns(?::[\w.-]+)?)="([^"]*)"/g)) {
+    if (!existing.has(match[1])) {
+      mergedRoot = mergedRoot.replace(/>$/, ` ${match[1]}="${match[2]}">`);
+      existing.add(match[1]);
+    }
+  }
+  const sourceIgnorable = xmlAttribute(sourceRoot, "mc:Ignorable").split(/\s+/).filter(Boolean);
+  if (sourceIgnorable.length) {
+    const combined = [...new Set([...xmlAttribute(mergedRoot, "mc:Ignorable").split(/\s+/).filter(Boolean), ...sourceIgnorable])];
+    mergedRoot = replaceXmlAttribute(mergedRoot.replace(/>$/, "/>"), "mc:Ignorable", combined.join(" ")).replace(/\/>$/, ">");
+  }
+  return baseXml.replace(baseRoot, mergedRoot);
+}
+
+function replaceMappedElementValues(xml, elementNames, mapping) {
+  let output = xml;
+  for (const [from, to] of mapping) {
+    const pattern = new RegExp(`(<w:(?:${elementNames.join("|")})\\b[^>]*\\bw:val=")${escapeRegExp(from)}(")`, "g");
+    output = output.replace(pattern, `$1${to}$2`);
+  }
+  return output;
+}
+
+function mergeStyles(baseXml, checklistXml, namespace) {
+  const styles = [...checklistXml.matchAll(/<w:style\b[\s\S]*?<\/w:style>/g)].map((match) => match[0]);
+  const styleMap = new Map();
+  for (const style of styles) {
+    const styleId = xmlAttribute(style, "w:styleId");
+    if (styleId) styleMap.set(styleId, `${namespace}_${styleId}`.slice(0, 250));
+  }
+  const remapped = styles.map((style) => {
+    const styleId = xmlAttribute(style, "w:styleId");
+    let output = replaceXmlAttribute(style, "w:styleId", styleMap.get(styleId));
+    output = output.replace(/\s+w:default="[^"]*"/g, "");
+    return replaceMappedElementValues(output, ["basedOn", "next", "link", "pStyle", "rStyle", "tblStyle"], styleMap);
+  }).join("");
+  let merged = mergeRootNamespaces(baseXml, checklistXml, "w:styles");
+  merged = merged.replace("</w:styles>", `${remapped}</w:styles>`);
+  return { xml: merged, styleMap };
+}
+
+function replaceStyleReferences(xml, styleMap) {
+  return replaceMappedElementValues(xml, ["pStyle", "rStyle", "tblStyle", "basedOn", "next", "link", "numStyleLink", "styleLink"], styleMap);
+}
+
+function numericIds(xml, attribute) {
+  return [...xml.matchAll(new RegExp(`${escapeRegExp(attribute)}="(\\d+)"`, "g"))].map((match) => Number(match[1]));
+}
+
+function mergeNumbering(baseXml, checklistXml, checklistBody, styleMap) {
+  if (!checklistXml || !/<w:numPr\b/.test(checklistBody)) return { xml: baseXml, body: checklistBody };
+  const targetXml = baseXml || checklistXml.replace(
+    /(<w:numbering\b[^>]*>)[\s\S]*?(<\/w:numbering>)/,
+    "$1$2",
+  );
+  const abstractBlocks = [...checklistXml.matchAll(/<w:abstractNum\b[\s\S]*?<\/w:abstractNum>/g)].map((match) => match[0]);
+  const numBlocks = [...checklistXml.matchAll(/<w:num\b[\s\S]*?<\/w:num>/g)].map((match) => match[0]);
+  let nextAbstract = Math.max(-1, ...numericIds(targetXml, "w:abstractNumId")) + 1;
+  let nextNum = Math.max(0, ...numericIds(targetXml, "w:numId")) + 1;
+  const abstractMap = new Map();
+  const numMap = new Map();
+  for (const block of abstractBlocks) abstractMap.set(xmlAttribute(block, "w:abstractNumId"), String(nextAbstract++));
+  for (const block of numBlocks) numMap.set(xmlAttribute(block, "w:numId"), String(nextNum++));
+  const remappedAbstract = abstractBlocks.map((block) => {
+    let output = replaceXmlAttribute(block, "w:abstractNumId", abstractMap.get(xmlAttribute(block, "w:abstractNumId")));
+    return replaceStyleReferences(output, styleMap);
+  }).join("");
+  const remappedNums = numBlocks.map((block) => {
+    let output = replaceXmlAttribute(block, "w:numId", numMap.get(xmlAttribute(block, "w:numId")));
+    for (const [from, to] of abstractMap) {
+      output = output.replace(new RegExp(`(<w:abstractNumId\\b[^>]*\\bw:val=")${escapeRegExp(from)}(")`, "g"), `$1${to}$2`);
+    }
+    return output;
+  }).join("");
+  let merged = mergeRootNamespaces(targetXml, checklistXml, "w:numbering");
+  merged = merged.replace("</w:numbering>", `${remappedAbstract}${remappedNums}</w:numbering>`);
+  return { xml: merged, body: replaceMappedElementValues(checklistBody, ["numId"], numMap) };
+}
+
+function parseRelationships(xml) {
+  return [...String(xml || "").matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => ({
+    xml: match[0],
+    id: xmlAttribute(match[0], "Id"),
+    type: xmlAttribute(match[0], "Type"),
+    target: xmlAttribute(match[0], "Target"),
+    targetMode: xmlAttribute(match[0], "TargetMode"),
+  }));
+}
+
+function replaceRelationshipId(xml, from, to) {
+  return xml.replace(new RegExp(`(r:(?:id|embed|link)=")${escapeRegExp(from)}(")`, "g"), `$1${to}$2`);
+}
+
+function relationshipPartName(partName) {
+  return path.posix.join(path.posix.dirname(partName), "_rels", `${path.posix.basename(partName)}.rels`);
+}
+
+function setEntry(entries, name, data) {
+  const existing = entries.find((entry) => entry.name === name);
+  if (existing) existing.data = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+  else entries.push({ name, data: Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8") });
+}
+
+function entryXml(entries, name) {
+  return entries.find((entry) => entry.name === name)?.data.toString("utf8") || "";
+}
+
+function addContentTypeOverride(xml, partName, contentType) {
+  if (new RegExp(`PartName="${escapeRegExp(partName)}"`).test(xml)) return xml;
+  return xml.replace("</Types>", `<Override PartName="${encodeXml(partName)}" ContentType="${contentType}"/></Types>`);
+}
+
+function copyChecklistHeaderFooterParts({ baseEntries, checklistEntries, namespace, styleMap, documentRels, contentTypes, checklistBody }) {
+  const checklistRels = parseRelationships(entryXml(checklistEntries, "word/_rels/document.xml.rels"));
+  const baseRelationshipIds = [...documentRels.matchAll(/\bId="rId(\d+)"/g)].map((match) => Number(match[1]));
+  let nextRelationship = Math.max(0, ...baseRelationshipIds) + 1;
+  let updatedRels = documentRels;
+  let updatedContentTypes = contentTypes;
+  let updatedBody = checklistBody;
+  for (const relationship of checklistRels.filter((entry) => /\/(?:header|footer)$/.test(entry.type))) {
+    const sourcePart = path.posix.normalize(path.posix.join("word", relationship.target));
+    const sourceEntry = checklistEntries.find((entry) => entry.name === sourcePart);
+    if (!sourceEntry) throw new Error(`Checklist merge failed because ${relationship.target} is missing`);
+    const partKind = relationship.type.endsWith("/header") ? "header" : "footer";
+    const newBaseName = `${namespace}-${path.posix.basename(sourcePart)}`;
+    const newPart = path.posix.join("word", newBaseName);
+    const newRelationshipId = `rId${nextRelationship++}`;
+    updatedBody = replaceRelationshipId(updatedBody, relationship.id, newRelationshipId);
+    let partXml = replaceStyleReferences(sourceEntry.data.toString("utf8"), styleMap);
+    const sourcePartRelsName = relationshipPartName(sourcePart);
+    const sourcePartRels = entryXml(checklistEntries, sourcePartRelsName);
+    if (sourcePartRels) {
+      let newPartRels = sourcePartRels;
+      for (const partRelationship of parseRelationships(sourcePartRels)) {
+        if (!partRelationship.type.endsWith("/image") || partRelationship.targetMode === "External") {
+          throw new Error(`Checklist merge does not support ${partRelationship.type.split("/").pop()} relationships in ${path.posix.basename(sourcePart)}`);
+        }
+        const sourceMediaPart = path.posix.normalize(path.posix.join(path.posix.dirname(sourcePart), partRelationship.target));
+        const mediaEntry = checklistEntries.find((entry) => entry.name === sourceMediaPart);
+        if (!mediaEntry) throw new Error(`Checklist merge failed because ${partRelationship.target} is missing`);
+        const newMediaBase = `${namespace}-${path.posix.basename(sourcePart, ".xml")}-${path.posix.basename(sourceMediaPart)}`;
+        const newMediaPart = path.posix.join("word", "media", newMediaBase);
+        setEntry(baseEntries, newMediaPart, mediaEntry.data);
+        const relativeTarget = path.posix.relative(path.posix.dirname(newPart), newMediaPart);
+        newPartRels = newPartRels.replace(partRelationship.xml, replaceXmlAttribute(partRelationship.xml, "Target", relativeTarget));
+      }
+      setEntry(baseEntries, relationshipPartName(newPart), newPartRels);
+    }
+    setEntry(baseEntries, newPart, partXml);
+    const relationshipXml = replaceXmlAttribute(replaceXmlAttribute(relationship.xml, "Id", newRelationshipId), "Target", newBaseName);
+    updatedRels = updatedRels.replace("</Relationships>", `${relationshipXml}</Relationships>`);
+    updatedContentTypes = addContentTypeOverride(
+      updatedContentTypes,
+      `/${newPart}`,
+      `application/vnd.openxmlformats-officedocument.wordprocessingml.${partKind}+xml`,
+    );
+  }
+  return { documentRels: updatedRels, contentTypes: updatedContentTypes, checklistBody: updatedBody };
+}
+
+function extractBody(xml) {
+  const match = /<w:body\b[^>]*>([\s\S]*?)<\/w:body>/.exec(xml);
+  if (!match) throw new Error("Word document is missing its body");
+  return match[1];
+}
+
+function removeFinalSectionProperties(body) {
+  const matches = [...body.matchAll(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g)];
+  const finalSection = matches.at(-1);
+  if (!finalSection) throw new Error("Word document is missing final section properties");
+  return {
+    content: `${body.slice(0, finalSection.index)}${body.slice(finalSection.index + finalSection[0].length)}`,
+    section: finalSection[0],
+  };
+}
+
+function validateChecklistBodyRelationships(checklistEntries, checklistBody) {
+  const referencedIds = new Set(
+    [...checklistBody.matchAll(/r:(?:id|embed|link)="([^"]+)"/g)].map((match) => match[1]),
+  );
+  const relationships = parseRelationships(entryXml(checklistEntries, "word/_rels/document.xml.rels"));
+  for (const relationship of relationships.filter((entry) => referencedIds.has(entry.id))) {
+    if (/\/(?:header|footer)$/.test(relationship.type)) continue;
+    const kind = relationship.type.split("/").pop() || "unknown";
+    throw new Error(`Checklist merge does not support ${kind} relationships in the document body`);
+  }
+}
+
+function nextPageSection(sectionXml) {
+  if (/<w:type\b/.test(sectionXml)) return sectionXml.replace(/<w:type\b[^>]*\/?\s*>/, '<w:type w:val="nextPage"/>');
+  return sectionXml.replace(/<w:sectPr\b[^>]*>/, (opening) => `${opening}<w:type w:val="nextPage"/>`);
+}
+
+function mergeChecklistDocument(baseEntries, checklistEntries, namespace) {
+  const outputEntries = baseEntries.map((entry) => ({ ...entry, data: Buffer.from(entry.data) }));
+  let baseDocument = entryXml(outputEntries, "word/document.xml");
+  const checklistDocument = entryXml(checklistEntries, "word/document.xml");
+  let baseBody = removeFinalSectionProperties(extractBody(baseDocument));
+  let checklistBody = removeFinalSectionProperties(extractBody(checklistDocument));
+  validateChecklistBodyRelationships(checklistEntries, `${checklistBody.content}${checklistBody.section}`);
+
+  const baseStyles = entryXml(outputEntries, "word/styles.xml");
+  const checklistStyles = entryXml(checklistEntries, "word/styles.xml");
+  if (!baseStyles || !checklistStyles) throw new Error("Word merge requires styles.xml in both documents");
+  const styles = mergeStyles(baseStyles, checklistStyles, namespace);
+  setEntry(outputEntries, "word/styles.xml", styles.xml);
+  checklistBody.content = replaceStyleReferences(checklistBody.content, styles.styleMap);
+  checklistBody.section = replaceStyleReferences(checklistBody.section, styles.styleMap);
+
+  const baseNumbering = entryXml(outputEntries, "word/numbering.xml");
+  const numbering = mergeNumbering(
+    baseNumbering,
+    entryXml(checklistEntries, "word/numbering.xml"),
+    checklistBody.content,
+    styles.styleMap,
+  );
+  if (numbering.xml) setEntry(outputEntries, "word/numbering.xml", numbering.xml);
+  checklistBody.content = numbering.body;
+
+  let documentRels = entryXml(outputEntries, "word/_rels/document.xml.rels");
+  let contentTypes = entryXml(outputEntries, "[Content_Types].xml");
+  if (!documentRels || !contentTypes) throw new Error("Word merge requires document relationships and content types");
+  if (!baseNumbering && numbering.xml) {
+    const numberingRelationship = parseRelationships(entryXml(checklistEntries, "word/_rels/document.xml.rels"))
+      .find((entry) => entry.type.endsWith("/numbering"));
+    if (!numberingRelationship) throw new Error("Checklist merge failed because its numbering relationship is missing");
+    const existingIds = [...documentRels.matchAll(/\bId="rId(\d+)"/g)].map((match) => Number(match[1]));
+    const relationshipXml = replaceXmlAttribute(
+      replaceXmlAttribute(numberingRelationship.xml, "Id", `rId${Math.max(0, ...existingIds) + 1}`),
+      "Target",
+      "numbering.xml",
+    );
+    documentRels = documentRels.replace("</Relationships>", `${relationshipXml}</Relationships>`);
+    contentTypes = addContentTypeOverride(
+      contentTypes,
+      "/word/numbering.xml",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+    );
+  }
+  const copiedParts = copyChecklistHeaderFooterParts({
+    baseEntries: outputEntries,
+    checklistEntries,
+    namespace,
+    styleMap: styles.styleMap,
+    documentRels,
+    contentTypes,
+    checklistBody: `${checklistBody.content}${checklistBody.section}`,
+  });
+  documentRels = copiedParts.documentRels;
+  contentTypes = copiedParts.contentTypes;
+  const copiedChecklist = removeFinalSectionProperties(copiedParts.checklistBody);
+
+  baseDocument = mergeRootNamespaces(baseDocument, checklistDocument, "w:document");
+  const combinedBody = `${baseBody.content}<w:p><w:pPr>${nextPageSection(baseBody.section)}</w:pPr></w:p>${copiedChecklist.content}${copiedChecklist.section}`;
+  baseDocument = baseDocument.replace(/(<w:body\b[^>]*>)[\s\S]*?(<\/w:body>)/, `$1${combinedBody}$2`);
+  setEntry(outputEntries, "word/document.xml", baseDocument);
+  setEntry(outputEntries, "word/_rels/document.xml.rels", documentRels);
+  setEntry(outputEntries, "[Content_Types].xml", contentTypes);
+
+  const checklistSettings = entryXml(checklistEntries, "word/settings.xml");
+  let baseSettings = entryXml(outputEntries, "word/settings.xml");
+  if (/<w:evenAndOddHeaders\b/.test(checklistSettings) && !/<w:evenAndOddHeaders\b/.test(baseSettings)) {
+    baseSettings = baseSettings.replace("</w:settings>", "<w:evenAndOddHeaders/></w:settings>");
+    setEntry(outputEntries, "word/settings.xml", baseSettings);
+  }
+  return outputEntries;
+}
+
 export function getWordTemplateInfo() {
   const directories = configuredTemplateDirectories();
   const activeDirectory = directories.find((directory) => fs.existsSync(directory)) || directories[0];
@@ -263,17 +555,55 @@ export function getWordTemplateInfo() {
   return { directory: activeDirectory, templates };
 }
 
-export async function createWordDocument(item, title = "Contech Document", part = "main") {
-  const template = resolveTemplate(item, part);
-  const context = contextFor(item, title);
-  const omitReferences = ["CPR", "TR"].includes(String(item.requestType || (item.isCPR ? "CPR" : "IR")).toUpperCase());
-  const entries = readZipEntries(fs.readFileSync(template.path)).map((entry) => {
+function renderTemplateEntries(filename, context, omitReferences) {
+  return readZipEntries(fs.readFileSync(filename)).map((entry) => {
     if (!entry.name.startsWith("word/") || !entry.name.endsWith(".xml")) return entry;
     const rendered = renderXml(entry.data.toString("utf8"), context);
-    return { ...entry, data: Buffer.from(applyCalibri(omitReferences ? removeReferenceParagraphs(rendered) : rendered, entry.name), "utf8") };
+    return {
+      ...entry,
+      data: Buffer.from(applyCalibri(omitReferences ? removeReferenceParagraphs(rendered) : rendered, entry.name), "utf8"),
+    };
   });
+}
+
+export async function createWordDocument(item, title = "Contech Document", part = "main") {
+  if (part !== "main") throw new Error("Separate CPR checklist downloads are no longer supported");
+  const template = resolveTemplate(item);
+  const context = contextFor(item, title);
+  const omitReferences = ["CPR", "TR"].includes(String(item.requestType || (item.isCPR ? "CPR" : "IR")).toUpperCase());
+  let entries = renderTemplateEntries(template.path, context, omitReferences);
+  let checklist;
+  if (item.checklistId) {
+    checklist = validateChecklistSelection({
+      checklistId: item.checklistId,
+      requestType: item.requestType || (item.isCPR ? "CPR" : "IR"),
+      department: item.department,
+      location: item.location,
+      requireConfigured: false,
+    });
+    const checklistEntries = renderTemplateEntries(checklist.templatePath, context, false);
+    entries = mergeChecklistDocument(entries, checklistEntries, checklist.id.replace(/[^a-z0-9_-]/gi, "_"));
+  }
   const output = writeZipEntries(entries);
-  output.templateName = template.name;
+  output.templateName = checklist ? `${template.name} + ${checklist.sourceName}` : template.name;
   output.templateDirectory = template.directory;
+  return output;
+}
+
+export async function createChecklistDocument(item) {
+  const requestType = String(item.parentRequestType || item.requestType || (item.isCPR ? "CPR" : "IR")).toUpperCase();
+  const checklist = validateChecklistSelection({
+    checklistId: item.checklistId,
+    requestType,
+    department: item.department,
+    location: item.location,
+    requireConfigured: false,
+    requireLocation: false,
+  });
+  if (!checklist) throw new Error("This revision does not have a selected checklist");
+  const entries = renderTemplateEntries(checklist.templatePath, contextFor(item, "Revision Checklist"), false);
+  const output = writeZipEntries(entries);
+  output.templateName = checklist.sourceName;
+  output.templateDirectory = path.dirname(checklist.templatePath);
   return output;
 }

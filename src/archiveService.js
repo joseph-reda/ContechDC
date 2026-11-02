@@ -10,20 +10,33 @@ async function postProjectRequestArchive(apiUrl, payload) {
   return data;
 }
 
-export function projectRequestArchiveKey(project, requestType) {
-  return JSON.stringify([project, requestType]);
+export function projectRequestArchiveKey(project, requestType, department = "") {
+  return JSON.stringify([project, requestType, department]);
 }
 
-export function archiveProjectRequestsConfirmation({ project, requestType, count }) {
+export function archiveProjectRequestsConfirmation({ project, requestType, department = "", count }) {
   const noun = count === 1 ? "record" : "records";
-  return `Are you sure you want to archive all ${requestType} records for Project ${project}?\n\n${count} active ${noun} will be archived and hidden from active lists.`;
+  const scope = department ? ` — ${department}` : "";
+  return `Are you sure you want to archive all ${requestType}${scope} records for Project ${project}?\n\n${count} active ${noun} will be archived and hidden from active lists.`;
 }
 
-export async function previewProjectRequestsArchive(apiUrl, project, requestType) {
-  return postProjectRequestArchive(apiUrl, { project, requestType, preview: true });
+export async function previewProjectRequestsArchive(apiUrl, project, requestType, department = "") {
+  return postProjectRequestArchive(apiUrl, { project, requestType, ...(department ? { department } : {}), preview: true });
 }
 
-export async function archiveProjectRequests(apiUrl, project, requestType) {
-  return postProjectRequestArchive(apiUrl, { project, requestType });
+export async function archiveProjectRequests(apiUrl, project, requestType, department = "") {
+  return postProjectRequestArchive(apiUrl, { project, requestType, ...(department ? { department } : {}) });
+}
+
+export async function copyProjectRequests(apiUrl, project, requestType, department = "") {
+  const response = await fetch(`${apiUrl}/copy/project-requests`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project, requestType, ...(department ? { department } : {}) }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Copy operation failed");
+  return data;
 }
 

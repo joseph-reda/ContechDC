@@ -4,6 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import { serialPriorityScopeKey, sortSerialRecords } from "../src/utils/serialOrdering.js";
+
 const backendDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(backendDirectory, "..");
 
@@ -171,14 +173,25 @@ export function saveProject(project) {
 }
 
 export function listItems(collection, { includeArchived = true } = {}) {
-  return db.prepare("SELECT id, data FROM items WHERE collection = ? ORDER BY created_at DESC").all(collection)
-    .map((row) => ({ ...parseJson(row.data, {}), id: row.id, uniqueId: row.id }))
+  const items = db.prepare("SELECT id, data, created_at FROM items WHERE collection = ? ORDER BY created_at DESC, id ASC").all(collection)
+    .map((row) => {
+      const data = parseJson(row.data, {});
+      return { ...data, id: row.id, uniqueId: row.id, createdAt: data.createdAt || row.created_at };
+    })
     .filter((item) => includeArchived || !item.isArchived);
+  if (collection !== "irs") return items;
+  const priorities = getSetting("serial_order_priorities", {});
+  return sortSerialRecords(items.map((item) => ({
+    ...item,
+    serialOrderPriority: priorities[serialPriorityScopeKey(item)] === item.id,
+  })));
 }
 
 export function findItem(collection, id) {
-  const row = db.prepare("SELECT id, data FROM items WHERE collection = ? AND id = ?").get(collection, id);
-  return row ? { ...parseJson(row.data, {}), id: row.id, uniqueId: row.id } : null;
+  const row = db.prepare("SELECT id, data, created_at FROM items WHERE collection = ? AND id = ?").get(collection, id);
+  if (!row) return null;
+  const data = parseJson(row.data, {});
+  return { ...data, id: row.id, uniqueId: row.id, createdAt: data.createdAt || row.created_at };
 }
 
 export function saveItem(collection, item) {

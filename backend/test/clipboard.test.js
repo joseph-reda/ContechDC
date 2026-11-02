@@ -24,6 +24,7 @@ test("each project and IR/CPR subsection copies only its displayed records", () 
   ];
   const groups = groupDcSections(displayed);
   assert.deepEqual(groups.map((group) => [group.project, group.sections.map((section) => [section.type, section.items.length])]), [["D6-A1", [["IR", 2], ["CPR", 1]]], ["D6-A2", [["IR", 1], ["CPR", 1]]]]);
+  assert.deepEqual(groups[0].sections[0].disciplines.map((group) => [group.discipline, group.items.map((item) => item.id)]), [["ARCH", ["a-ir-2"]], ["Civil", ["a-ir-1"]]]);
   const a1Ir = rowsInProjectTypeSection(groups[0].sections[0].items, "D6-A1", "IR");
   assert.deepEqual(a1Ir.map((item) => item.id), ["a-ir-1", "a-ir-2"]);
   assert.equal(convertToExcelText(a1Ir), "A1 IR slab\tL1\tBuilding\t2026-10-08\nA1 IR finish\tL4\tBuilding\t2026-10-08");

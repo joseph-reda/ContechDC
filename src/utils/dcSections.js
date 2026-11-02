@@ -1,4 +1,24 @@
+import { compareSerialWithinScope, isSerialOrderedRecord } from "./serialOrdering.js";
+
 const TYPE_ORDER = ["IR", "CPR", "TR", "REVISION", "SD"];
+const DISCIPLINE_ORDER = ["ARCH", "Civil", "ELECT", "MECH", "SURV"];
+
+export function canonicalDiscipline(value) {
+  const raw = String(value || "").trim();
+  if (/^(st|civil|structural|structure)$/i.test(raw)) return "Civil";
+  if (/^(elec|elect|electrical)$/i.test(raw)) return "ELECT";
+  if (/^(mep|mech|mechanical)$/i.test(raw)) return "MECH";
+  if (/^(sur|surv|survey)$/i.test(raw)) return "SURV";
+  return raw.toUpperCase();
+}
+
+export function disciplineLabel(value) {
+  const discipline = canonicalDiscipline(value);
+  return discipline === "Civil" ? "Civil (ST)"
+    : discipline === "ELECT" ? "Electrical (ELEC)"
+      : discipline === "MECH" ? "Mechanical (MEP)"
+        : discipline === "SURV" ? "Survey (SUR)" : discipline || "Unassigned";
+}
 
 export function requestTypeOf(item) {
   if (item?.isRevision || String(item?.requestType || "").toUpperCase() === "REVISION") return "REVISION";
@@ -28,6 +48,22 @@ export function groupDcSections(items) {
       const aOrder = TYPE_ORDER.indexOf(a);
       const bOrder = TYPE_ORDER.indexOf(b);
       return (aOrder < 0 ? TYPE_ORDER.length : aOrder) - (bOrder < 0 ? TYPE_ORDER.length : bOrder) || a.localeCompare(b);
-    }).map(([type, records]) => ({ type, items: records })),
+    }).map(([type, records]) => ({
+      type,
+      items: records.some(isSerialOrderedRecord) ? [...records].sort(compareSerialWithinScope) : records,
+      disciplines: [...records.reduce((groups, item) => {
+        const discipline = canonicalDiscipline(item.department);
+        if (!groups.has(discipline)) groups.set(discipline, []);
+        groups.get(discipline).push(item);
+        return groups;
+      }, new Map())].sort(([a], [b]) => {
+        const aOrder = DISCIPLINE_ORDER.indexOf(a);
+        const bOrder = DISCIPLINE_ORDER.indexOf(b);
+        return (aOrder < 0 ? DISCIPLINE_ORDER.length : aOrder) - (bOrder < 0 ? DISCIPLINE_ORDER.length : bOrder) || a.localeCompare(b);
+      }).map(([discipline, disciplineItems]) => ({
+        discipline,
+        items: disciplineItems.some(isSerialOrderedRecord) ? [...disciplineItems].sort(compareSerialWithinScope) : disciplineItems,
+      })),
+    })),
   }));
 }

@@ -1,6 +1,7 @@
 // src/components/admin/DataManagementTab.jsx
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { API_URL } from "../../config";
+import ChecklistManagementSection from "./ChecklistManagementSection";
 
 // ==============================
 // Constants
@@ -815,12 +816,12 @@ export default function DataManagementTab() {
       {/* Header */}
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">🗃️ Data Management</h2>
-        <p className="text-gray-600">Manage location rules, general descriptions, sheet titles, and subject titles</p>
+        <p className="text-gray-600">Manage location rules, Word checklists, general descriptions, sheet titles, and subject titles</p>
       </div>
 
       {/* Tab navigation */}
       <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
-        {["location_rules", "descriptions", "subjects", "sheets"].map(section => (
+        {["location_rules", "checklists", "descriptions", "subjects", "sheets"].map(section => (
           <button
             key={section}
             onClick={() => setActiveSection(section)}
@@ -831,6 +832,7 @@ export default function DataManagementTab() {
             }`}
           >
             {section === "location_rules" && "📍 Location Rules"}
+            {section === "checklists" && "☑ Word Checklists"}
             {section === "descriptions" && "📝 General Descriptions"}
             {section === "subjects" && "📌 SD Submittal Subject"}
             {section === "sheets" && "📄 Drawing List"}
@@ -839,6 +841,8 @@ export default function DataManagementTab() {
       </div>
 
       <div className="space-y-6">
+        {activeSection === "checklists" && <ChecklistManagementSection showToast={showToast} />}
+
         {/* ===== LOCATION RULES SECTION ===== */}
         {activeSection === "location_rules" && (
           <div className="space-y-6">

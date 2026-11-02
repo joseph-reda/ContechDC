@@ -21,7 +21,6 @@ test("every bundled Word generation path renders date placeholders as DD/MM/YYYY
   const cases = [
     ...["ARCH", "Civil", "ELECT", "MECH", "SURV"].map((department) => ({ label: `IR ${department}`, item: { requestType: "IR", department, irNo: `IR-${department}` }, part: "main" })),
     { label: "CPR cover", item: { requestType: "CPR", department: "Civil", irNo: "CPR-1" }, part: "main" },
-    { label: "CPR checklist", item: { requestType: "CPR", department: "Civil", irNo: "CPR-1" }, part: "checklist" },
     { label: "TR", item: { requestType: "TR", department: "Civil", irNo: "TR-1" }, part: "main" },
     { label: "legacy PPIR template", item: { requestType: "PPIR", department: "Civil", irNo: "PPIR-1" }, part: "main" },
     ...["ARCH", "Civil", "ELECT", "MECH", "SURV"].map((department) => ({ label: `SD ${department}`, item: { department, sdNo: `SD-${department}`, sheets: [] }, part: "main" })),

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { archiveProjectRequests, archiveProjectRequestsConfirmation, previewProjectRequestsArchive, projectRequestArchiveKey } from "../../archiveService";
+import { archiveProjectRequests, archiveProjectRequestsConfirmation, copyProjectRequests, previewProjectRequestsArchive, projectRequestArchiveKey } from "../../archiveService";
 import { API_URL } from "../../config";
+import { LoadingIndicator, useNotifications } from "../Feedback";
 import { copyAllRows, copyRow, displayedDescription } from "../../excelClipboardService";
 import { displayTimestamp } from "../../utils/documentDisplay";
-import { rowsInProjectTypeSection } from "../../utils/dcSections";
 import DcRequestForm from "./DcRequestForm";
 import DcProjectSections from "./DcProjectSections";
 import DocumentReferences from "./DocumentReferences";
@@ -39,23 +39,16 @@ function Stat({ label, value, tone = "text-slate-900" }) {
   );
 }
 
-function Toast({ value }) {
-  if (!value.message) return null;
-  const color = value.type === "error" ? "border-red-200 bg-red-50 text-red-800" : value.type === "warning" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-800";
-  return <div role="status" className={`fixed right-5 top-20 z-50 rounded-lg border px-4 py-3 text-sm font-semibold shadow-lg ${color}`}>{value.message}</div>;
-}
-
 export default function DcWorkspacePage({ fixedType = "", creationType = "", groupByProject = false, groupByType = false, title = "Document control queue", subtitle = "Review, issue, copy and archive project records from one table." }) {
   const [items, setItems] = useState([]);
   const [summary, setSummary] = useState({ total: 0, pending: 0, completed: 0, downloaded: 0, byType: {} });
   const [filterOptions, setFilterOptions] = useState({ projects: [], departments: [] });
-  const [filters, setFilters] = useState({ q: "", type: fixedType || "all", project: "all", department: "all", status: "all", sort: "oldest" });
+  const [filters, setFilters] = useState({ q: "", type: fixedType || "all", project: "all", department: "all", status: "all" });
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [toast, setToast] = useState({ message: "", type: "success" });
   const [busy, setBusy] = useState({});
   const [editingId, setEditingId] = useState("");
   const [serialDraft, setSerialDraft] = useState("");
@@ -65,14 +58,11 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
   const [copyingGroup, setCopyingGroup] = useState("");
   const [archivingScope, setArchivingScope] = useState("");
   const archiveOperation = useRef("");
+  const busyOperations = useRef(new Set());
+  const { notify } = useNotifications();
 
   const user = useMemo(() => JSON.parse(localStorage.getItem("user") || "{}"), []);
   const group = groupByProject ? "project-type" : groupByType ? "type" : "";
-
-  const notify = useCallback((message, type = "success") => {
-    setToast({ message, type });
-    window.setTimeout(() => setToast({ message: "", type: "success" }), type === "warning" ? 7000 : 3000);
-  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -113,18 +103,23 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
     setFilters((current) => ({ ...current, [key]: value }));
   };
 
-  const withBusy = async (id, task) => {
-    setBusy((current) => ({ ...current, [id]: true }));
-    try { await task(); } finally { setBusy((current) => ({ ...current, [id]: false })); }
+  const withBusy = async (id, task, operation = "working") => {
+    if (busyOperations.current.has(id)) return;
+    busyOperations.current.add(id);
+    setBusy((current) => ({ ...current, [id]: operation }));
+    try { await task(); } finally {
+      busyOperations.current.delete(id);
+      setBusy((current) => ({ ...current, [id]: "" }));
+    }
   };
 
-  const downloadWord = (item, part = typeFor(item) === "CPR" ? "cover" : "main") => withBusy(item.uniqueId || item.id, async () => {
+  const downloadWord = (item) => withBusy(item.uniqueId || item.id, async () => {
     try {
       const response = await fetch(`${API_URL}/dc/documents/${item.uniqueId || item.id}/word`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ part }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -134,7 +129,7 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${numberFor(item)}${typeFor(item) === "CPR" ? `-${part}` : ""}.docx`;
+      anchor.download = `${numberFor(item)}.docx`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -146,6 +141,32 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
       notify(caught.message, "error");
     }
   });
+
+  const downloadRevisionChecklist = (item) => withBusy(item.uniqueId || item.id, async () => {
+    try {
+      const response = await fetch(`${API_URL}/dc/documents/${item.uniqueId || item.id}/checklist`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Checklist download failed");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${item.userRevNumber || item.revNo || "revision"}-checklist.docx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      notify(`Revision checklist downloaded using ${response.headers.get("x-contech-template") || item.checklistName || "the selected template"}`);
+      setRefreshToken((value) => value + 1);
+    } catch (caught) {
+      notify(caught.message, "error");
+    }
+  }, "checklist");
 
   const markDone = (item) => withBusy(item.uniqueId || item.id, async () => {
     try {
@@ -188,20 +209,20 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
     });
   };
 
-  const archiveProjectType = async (project, requestType) => {
+  const archiveProjectType = async (project, requestType, department = "") => {
     if (archiveOperation.current) return;
-    const key = projectRequestArchiveKey(project, requestType);
+    const key = projectRequestArchiveKey(project, requestType, department);
     archiveOperation.current = key;
     setArchivingScope(key);
     try {
-      const preview = await previewProjectRequestsArchive(API_URL, project, requestType);
+      const preview = await previewProjectRequestsArchive(API_URL, project, requestType, department);
       if (!preview.eligibleCount) {
-        notify(`No active ${requestType} records are eligible for Project ${project}`, "warning");
+        notify(`No active ${requestType}${department ? ` — ${department}` : ""} records are eligible for Project ${project}`, "warning");
         return;
       }
-      if (!window.confirm(archiveProjectRequestsConfirmation({ project, requestType, count: preview.eligibleCount }))) return;
-      const result = await archiveProjectRequests(API_URL, project, requestType);
-      notify(`${result.archivedCount} ${requestType} ${result.archivedCount === 1 ? "record" : "records"} archived for Project ${project}`);
+      if (!window.confirm(archiveProjectRequestsConfirmation({ project, requestType, department, count: preview.eligibleCount }))) return;
+      const result = await archiveProjectRequests(API_URL, project, requestType, department);
+      notify(`${result.archivedCount} ${requestType}${department ? ` — ${department}` : ""} ${result.archivedCount === 1 ? "record" : "records"} archived for Project ${project}`);
       setPage(1);
       setRefreshToken((current) => current + 1);
     } catch (caught) {
@@ -268,22 +289,23 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
     });
   };
 
-  const copyOne = async (item) => {
+  const copyOne = (item) => withBusy(item.uniqueId || item.id, async () => {
     try {
       await copyRow(item);
       notify("One Excel row copied");
     } catch (caught) { notify(caught.message, "error"); }
-  };
+  });
 
-  const copyAllFunction = async (project, type, sectionItems) => {
+  const copyAllFunction = async (project, type, department = "") => {
     if (!["IR", "TR", "CPR"].includes(type) || copyingGroup) return;
-    const groupKey = JSON.stringify([project, type]);
+    const groupKey = JSON.stringify([project, type, department]);
     setCopyingGroup(groupKey);
     try {
-      const copyable = rowsInProjectTypeSection(sectionItems, project, type);
+      const result = await copyProjectRequests(API_URL, project, type, department);
+      const copyable = result.records || [];
       if (!copyable.length) throw new Error("No copyable records are in this section");
       await copyAllRows(copyable);
-      notify(`${copyable.length} displayed ${type} rows copied from ${project || "Unassigned"}`);
+      notify(`${copyable.length} ${type}${department ? ` — ${department}` : ""} rows copied from ${project || "Unassigned"}`);
     } catch (caught) { notify(caught.message, "error"); }
     finally { setCopyingGroup(""); }
   };
@@ -291,7 +313,8 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
   const renderRecordRow = (item) => {
     const id = item.uniqueId || item.id;
     const type = typeFor(item);
-    const isBusy = busy[id];
+    const busyOperation = busy[id];
+    const isBusy = Boolean(busyOperation);
     const submitted = displayTimestamp(item.sentAt || item.createdAt || item.receivedDate);
     return <tr key={id} className="align-top hover:bg-slate-50">
       <td className="px-4 py-4">
@@ -300,16 +323,15 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
       </td>
       <td className="px-4 py-4"><Pill className={typeStyles[type] || typeStyles.IR}>{type}</Pill><div className="mt-2 max-w-[150px] text-xs text-slate-500">{item.locationType || item.typesMap?.[item.location || item.floor] || "—"}</div>{item.category && <div className="mt-1 max-w-[150px] text-xs text-slate-500">{item.category}</div>}</td>
       <td className="px-4 py-4"><div className="font-semibold">{item.project || "—"}</div><div className="mt-1 text-xs text-slate-500">{item.department || "—"}</div></td>
-      <td className="max-w-[420px] px-4 py-4"><div className="font-medium text-slate-800">{displayedDescription(item)}</div><div className="mt-1 text-xs text-slate-500">{item.location || item.floor || "No location"}</div><DocumentReferences item={item} /></td>
+      <td className="max-w-[420px] px-4 py-4">{item.isRevision ? <div className="space-y-2"><div><span className="text-xs font-bold uppercase tracking-wide text-slate-500">IR Revision Number</span><div className="font-semibold text-slate-900">{item.userRevNumber || item.revText || item.revNo}</div></div>{item.revNote && <div><span className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</span><div className="font-medium text-slate-800">{item.revNote}</div></div>}</div> : <><div className="font-medium text-slate-800">{displayedDescription(item)}</div><div className="mt-1 text-xs text-slate-500">{item.location || item.floor || "No location"}</div><DocumentReferences item={item} /></>}</td>
       <td className="px-4 py-4"><div>{item.user || "—"}</div><div className="mt-1 text-xs text-slate-500">{submitted.date}</div>{submitted.time && <div className="dc-record-time">{submitted.time}</div>}</td>
-      <td className="px-4 py-4">{type === "CPR" && item.wordDownloads && <div className="mb-2 text-xs text-slate-500">{item.wordDownloads.cover ? "Cover ✓" : "Cover pending"} · {item.wordDownloads.checklist ? "Checklist ✓" : "Checklist pending"}</div>}<Pill className={item.isDone ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}>{item.isDone ? "Completed" : "Pending"}</Pill>{item.downloadedBy && <div className="mt-2 text-xs text-slate-500">by {item.downloadedBy}</div>}</td>
-      <td className="px-4 py-4"><div className="dc-row-actions"><button disabled={isBusy || item.isRevision || Boolean(archivingScope)} onClick={() => copyOne(item)} className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold disabled:opacity-40">Copy</button>{!item.isRevision && type !== "CPR" && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => editReferences(item)} className="rounded border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 disabled:opacity-40">Edit Ref Drawings</button>}{!item.isRevision && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => downloadWord(item)} className="rounded bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">{type === "CPR" ? "Cover Word" : "Word"}</button>}{type === "CPR" && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => downloadWord(item, "checklist")} className="rounded border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 disabled:opacity-40">Pouring checklist · 2 pages</button>}{item.isRevision && !item.isDone && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => markDone(item)} className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Complete</button>}<button disabled={isBusy || Boolean(archivingScope)} onClick={() => archive(item)} className="rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40">Archive</button></div></td>
+      <td className="px-4 py-4">{item.checklistName && <div className="mb-2 max-w-[190px] text-xs text-slate-500">{item.checklistNumber ? `${item.checklistNumber} — ` : ""}{item.checklistName}</div>}{item.wordDownloads?.document && <div className="mb-2 text-xs text-slate-500">Combined Word ✓</div>}{item.wordDownloads?.checklist && <div className="mb-2 text-xs text-slate-500">Checklist downloaded ✓</div>}<Pill className={item.isDone ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}>{item.isDone ? "Completed" : "Pending"}</Pill>{item.downloadedBy && <div className="mt-2 text-xs text-slate-500">by {item.downloadedBy}</div>}</td>
+      <td className="px-4 py-4"><div className="dc-row-actions"><button disabled={isBusy || item.isRevision || Boolean(archivingScope)} onClick={() => copyOne(item)} className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold disabled:opacity-40">Copy</button>{!item.isRevision && type !== "CPR" && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => editReferences(item)} className="rounded border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 disabled:opacity-40">Edit Ref Drawings</button>}{!item.isRevision && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => downloadWord(item)} className="rounded bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">{type === "CPR" ? "Combined Word" : "Word"}</button>}{item.isRevision && item.checklistId && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => downloadRevisionChecklist(item)} className="rounded bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">{busyOperation === "checklist" ? <LoadingIndicator label="Downloading…" compact inverse /> : "Download checklist"}</button>}{item.isRevision && !item.isDone && <button disabled={isBusy || Boolean(archivingScope)} onClick={() => markDone(item)} className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Complete</button>}<button disabled={isBusy || Boolean(archivingScope)} onClick={() => archive(item)} className="rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 disabled:opacity-40">Archive</button></div></td>
     </tr>;
   };
 
   return (
     <main className={`dc-workspace min-h-screen bg-slate-100 pb-12 text-slate-900 ${creationType === "TR" ? "dc-tr-workspace" : ""}`}>
-      <Toast value={toast} />
       <div className="mx-auto max-w-[1600px] px-4 py-7 lg:px-8">
         <header className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div>
@@ -334,7 +356,7 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
 
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           {creationType === "TR" && <div className="tr-register-heading"><div><span>02 · Project register</span><h2>Manage test reports</h2><p>Find a report, update its details, copy register rows or download its Word form.</p></div><strong>{total} matching reports</strong></div>}
-          <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-7">
+          <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-2 xl:grid-cols-6">
             <input aria-label="Search documents" value={filters.q} onChange={(event) => updateFilter("q", event.target.value)} placeholder="Search number, project, description..." className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 xl:col-span-2" />
             {!fixedType && (
               <select aria-label="Document type" value={filters.type} onChange={(event) => updateFilter("type", event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
@@ -350,9 +372,7 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
             <select aria-label="Status" value={filters.status} onChange={(event) => updateFilter("status", event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
               <option value="all">All statuses</option><option value="pending">Pending</option><option value="completed">Completed</option>
             </select>
-            <select aria-label="Sort order" value={filters.sort} onChange={(event) => updateFilter("sort", event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-              <option value="oldest">Oldest first</option><option value="newest">Newest first</option>
-            </select>
+            <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">Serial · ascending</div>
           </div>
 
           {error && <div className="m-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{error}</div>}
@@ -367,7 +387,7 @@ export default function DcWorkspacePage({ fixedType = "", creationType = "", gro
             loading={loading}
           />
           {!loading && items.length === 0 && <div className="px-6 py-16 text-center"><div className="text-lg font-bold">No matching records</div><div className="mt-2 text-sm text-slate-500">Change the filters or refresh the queue.</div></div>}
-          {loading && <div className="px-6 py-12 text-center text-sm font-semibold text-slate-500">Loading document records...</div>}
+          {loading && <div className="px-6 py-12 text-center" aria-busy="true"><LoadingIndicator label="Loading document records…" /></div>}
           <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
             <div className="text-slate-500">{total} records · Page {page} of {totalPages}</div>
             <div className="flex gap-2"><button disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)} className="rounded border px-4 py-2 font-semibold disabled:opacity-40">Previous</button><button disabled={page >= totalPages || loading} onClick={() => setPage((value) => value + 1)} className="rounded border px-4 py-2 font-semibold disabled:opacity-40">Next</button></div>

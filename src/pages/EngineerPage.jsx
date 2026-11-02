@@ -1,9 +1,14 @@
 // src/pages/EngineerPage.jsx
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import SearchableInput from "../components/SearchableInput";
 import ReferenceDrawingsInput from "../components/ReferenceDrawingsInput";
+import { LoadingIndicator, useNotifications } from "../components/Feedback";
 import { API_URL } from "../config";
+import {
+  checklistDepartmentDiagnostic,
+  normalizeChecklistDepartment,
+} from "../utils/checklistDepartments";
 
 const FALLBACK_FLOORS = [
   "SOG", "Ground Floor", "1st Floor", "2nd Floor", "3rd Floor", "4th Floor",
@@ -20,12 +25,15 @@ const FALLBACK_DESCRIPTIONS = {
 export default function EngineerPage({ fixedRequestType = "" }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { notify: showToastMessage } = useNotifications();
 
   const requestedType = fixedRequestType.toLowerCase() || searchParams.get("type")?.toLowerCase() || "ir";
   const requestType = ["ppir", "tr"].includes(requestedType) ? "ir" : requestedType;
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const department = /^(st|civil|structural|structure)$/i.test(String(user?.department || "")) ? "Civil" : (user?.department || "");
+  const storedDepartment = String(user?.department || "").trim().replace(/\s+/g, " ");
+  const checklistDepartment = normalizeChecklistDepartment(storedDepartment);
+  const department = checklistDepartment === "ST" ? "Civil" : storedDepartment;
   const allowedTypes = Array.isArray(user?.allowedRequestTypes)
     ? user.allowedRequestTypes.map((type) => String(type).toLowerCase()).filter((type) => !["ppir", "tr"].includes(type))
     : ["ir"];
@@ -36,9 +44,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
     }
   }, [fixedRequestType, requestedType, requestType, allowedTypes, setSearchParams]);
 
-  const isCivilEngineer =
-    department?.toLowerCase().includes("civil") ||
-    department?.toLowerCase().includes("structure");
+  const isCivilEngineer = checklistDepartment === "ST";
 
   // حقول IR/CPR
   const [selectedProject, setSelectedProject] = useState("");
@@ -75,6 +81,10 @@ export default function EngineerPage({ fixedRequestType = "" }) {
   const [sheetTitleOptions, setSheetTitleOptions] = useState([]);
   const [sheetTitleAbbrMap, setSheetTitleAbbrMap] = useState({}); // { "title": "abbr" }
   const [loadingSdData, setLoadingSdData] = useState(false);
+  const [checklistOptions, setChecklistOptions] = useState([]);
+  const [selectedChecklistId, setSelectedChecklistId] = useState("");
+  const [loadingChecklists, setLoadingChecklists] = useState(false);
+  const [checklistLoadError, setChecklistLoadError] = useState("");
 
   // Tags
   const [irTags, setIrTags] = useState([]);
@@ -94,6 +104,10 @@ export default function EngineerPage({ fixedRequestType = "" }) {
   const [baseDescriptions, setBaseDescriptions] = useState([]);
   const [floors, setAvailableFloors] = useState([]);
   const [projectCounters, setProjectCounters] = useState({});
+  const [numberPreview, setNumberPreview] = useState(null);
+  const [loadingNumberPreview, setLoadingNumberPreview] = useState(false);
+  const [numberPreviewError, setNumberPreviewError] = useState("");
+  const [numberPreviewRefresh, setNumberPreviewRefresh] = useState(0);
 
   // نافذة إنشاء مراجعة
   const [showRevModal, setShowRevModal] = useState(false);
@@ -104,13 +118,11 @@ export default function EngineerPage({ fixedRequestType = "" }) {
   const [revText, setRevText] = useState("");
   const [revNote, setRevNote] = useState("");
   const [revSaving, setRevSaving] = useState(false);
+  const [revChecklistId, setRevChecklistId] = useState("");
+  const saveLock = useRef(false);
+  const revisionSaveLock = useRef(false);
 
-  const [toast, setToast] = useState({ show: false, message: "", type: "" });
-
-  const showToastMessage = useCallback((message, type = "success") => {
-    setToast({ show: true, message, type });
-    setTimeout(() => setToast({ show: false, message: "", type: "" }), 3000);
-  }, []);
+  const REV_PARENT_SELECTION_ENABLED = false;
 
   const getDepartmentAbbr = useCallback((dept) => {
     if (!dept) return "ST";
@@ -180,6 +192,43 @@ export default function EngineerPage({ fixedRequestType = "" }) {
     }
   };
 
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!selectedProject || requestType === "sd") {
+      setNumberPreview(null);
+      setNumberPreviewError("");
+      setLoadingNumberPreview(false);
+      return () => controller.abort();
+    }
+    const loadNumberPreview = async () => {
+      setLoadingNumberPreview(true);
+      setNumberPreviewError("");
+      try {
+        const params = new URLSearchParams({
+          project: selectedProject,
+          requestType: requestType.toUpperCase(),
+          department,
+        });
+        const response = await fetch(`${API_URL}/irs/next-number?${params}`, {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load the next request number");
+        setNumberPreview(data);
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setNumberPreview(null);
+          setNumberPreviewError(error.message || "Could not load the next request number");
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoadingNumberPreview(false);
+      }
+    };
+    loadNumberPreview();
+    return () => controller.abort();
+  }, [selectedProject, requestType, department, numberPreviewRefresh]);
+
   // تحميل المواقع (لـ IR/CPR)
   useEffect(() => {
     if (requestType === "sd") {
@@ -221,6 +270,50 @@ export default function EngineerPage({ fixedRequestType = "" }) {
     setIsEditingFinalDesc(false);
     setHasEditedFinalDesc(false);
   }, [selectedProject, requestType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!["ir", "cpr"].includes(requestType) || !department) {
+      setChecklistOptions([]);
+      setSelectedChecklistId("");
+      setChecklistLoadError("");
+      return () => { cancelled = true; };
+    }
+    if (!checklistDepartment) {
+      setChecklistOptions([]);
+      setSelectedChecklistId("");
+      setChecklistLoadError(checklistDepartmentDiagnostic(department));
+      return () => { cancelled = true; };
+    }
+    const loadChecklists = async () => {
+      setLoadingChecklists(true);
+      try {
+        const params = new URLSearchParams({
+          requestType: requestType.toUpperCase(),
+          department: checklistDepartment,
+        });
+        const response = await fetch(`${API_URL}/checklists/options?${params}`, { credentials: "include" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Checklist options could not be loaded");
+        if (cancelled) return;
+        const options = Array.isArray(data.options) ? data.options : [];
+        setChecklistLoadError("");
+        setChecklistOptions(options);
+        setSelectedChecklistId((current) => options.some((option) => option.id === current) ? current : "");
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Checklist options load failed:", error);
+          setChecklistOptions([]);
+          setSelectedChecklistId("");
+          setChecklistLoadError(error.message || "Checklist options could not be loaded");
+        }
+      } finally {
+        if (!cancelled) setLoadingChecklists(false);
+      }
+    };
+    loadChecklists();
+    return () => { cancelled = true; };
+  }, [requestType, department, checklistDepartment]);
 
   // تحميل الأوصاف العامة (IR/CPR)
   const loadDescriptions = useCallback(async () => {
@@ -443,6 +536,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
     setRemarks("");
     setRefDrawings([]);
     setRefMethod("");
+    setSelectedChecklistId("");
     setSurveyInput("");
     setSdSubject("");
     setProtoTypes([]);
@@ -484,6 +578,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
 
   // حفظ الطلب
   const handleSave = async () => {
+    if (saveLock.current) return;
     const descriptionToSubmit = isEditingFinalDesc ? descriptionDraft : finalDescription;
     if (requestType === "sd") {
       if (!selectedProject) {
@@ -505,6 +600,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         }
       }
 
+      saveLock.current = true;
       setSaving(true);
       try {
         const payload = {
@@ -542,6 +638,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         showToastMessage(`Error: ${err.message}`, "error");
       } finally {
         setSaving(false);
+        saveLock.current = false;
       }
     } else {
       // Save IR, CPR, PPIR or TR.
@@ -565,7 +662,12 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         showToastMessage("Please enter the received date", "error");
         return;
       }
+      if (!numberPreview?.irNo || loadingNumberPreview) {
+        showToastMessage("Wait until the server confirms the next request number", "error");
+        return;
+      }
 
+      saveLock.current = true;
       setSaving(true);
       const payload = {
         project: selectedProject,
@@ -581,6 +683,8 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         surveyInput: surveyInput,
         receivedDate: ["ppir", "tr"].includes(requestType) ? receivedDate : undefined,
         remarks: remarks.trim() || undefined,
+        expectedIrNo: numberPreview.irNo,
+        ...(selectedChecklistId ? { checklistId: selectedChecklistId } : {}),
       };
       if (requestType !== "cpr" && selectedFloor) {
         payload.floor = selectedFloor;
@@ -597,11 +701,13 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         if (res.ok) {
           const duplicates = data.duplicateSerialRequests || [];
           showToastMessage(duplicates.length
-            ? `${requestType.toUpperCase()} created. Warning: serial ${data.item.serialNumber} is also used by ${duplicates.map((other) => other.irNo).join(", ")}.`
-            : `${requestType.toUpperCase()} Created Successfully!`, duplicates.length ? "warning" : "success");
+            ? `${data.item.irNo} created. Warning: serial ${data.item.serialNumber} is also used by ${duplicates.map((other) => other.irNo).join(", ")}.`
+            : `${requestType.toUpperCase()} created successfully as ${data.item.irNo}.`, duplicates.length ? "warning" : "success");
           resetForm();
           await loadProjects();
+          setNumberPreviewRefresh((value) => value + 1);
         } else {
+          if (res.status === 409 && data.preview) setNumberPreview(data.preview);
           throw new Error(data.error || `Failed to create ${requestType}`);
         }
       } catch (err) {
@@ -609,13 +715,17 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         showToastMessage(`Error: ${err.message}`, "error");
       } finally {
         setSaving(false);
+        saveLock.current = false;
       }
     }
   };
 
   const handleSaveRev = async () => {
-    if (!revProject || !revParentId || !revText.trim()) {
-      showToastMessage("Select a project, its parent request, and a revision reference", "error");
+    if (revisionSaveLock.current) return;
+    if (!revProject || !revText.trim() || (REV_PARENT_SELECTION_ENABLED && !revParentId)) {
+      showToastMessage(REV_PARENT_SELECTION_ENABLED
+        ? "Select a project, its parent request, and an IR Revision Number"
+        : "Select a project and enter the IR Revision Number", "error");
       return;
     }
     let revisionType = "IR_REVISION";
@@ -629,6 +739,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
       parentRequestType = "CPR";
     }
 
+    revisionSaveLock.current = true;
     setRevSaving(true);
     try {
       const res = await fetch(`${API_URL}/revs`, {
@@ -636,13 +747,14 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project: revProject,
-          parentDocumentId: revParentId,
+          ...(REV_PARENT_SELECTION_ENABLED && revParentId ? { parentDocumentId: revParentId } : {}),
           revText: revText.trim(),
-          revNote: revNote,
+          revNote: revNote.trim(),
           user: user.username,
           department: department,
           revisionType: revisionType,
           parentRequestType: parentRequestType,
+          ...(revChecklistId ? { checklistId: revChecklistId } : {}),
         }),
       });
       const data = await res.json();
@@ -654,6 +766,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
         setRevParentId("");
         setRevText("");
         setRevNote("");
+        setRevChecklistId("");
       } else {
         throw new Error(data.error || "Failed to create revision");
       }
@@ -662,12 +775,19 @@ export default function EngineerPage({ fixedRequestType = "" }) {
       showToastMessage(err.message, "error");
     } finally {
       setRevSaving(false);
+      revisionSaveLock.current = false;
     }
   };
 
   const openRevisionDialog = async () => {
     setShowRevModal(true);
     setRevParentId("");
+    setRevChecklistId("");
+    if (!REV_PARENT_SELECTION_ENABLED) {
+      setRevisionParents([]);
+      setLoadingRevisionParents(false);
+      return;
+    }
     setLoadingRevisionParents(true);
     try {
       const response = await fetch(`${API_URL}/irs`, { credentials: "include" });
@@ -698,30 +818,27 @@ export default function EngineerPage({ fixedRequestType = "" }) {
     if (!selectedProject || !department) return "";
     const deptAbbr = getDepartmentAbbr(department);
     const counters = projectCounters[selectedProject] || {};
-    const counterKey = requestType === "cpr" ? "CPR" :
-                       requestType === "sd" ? `SD_${deptAbbr}` :
-                       ["ppir", "tr"].includes(requestType) ? `${requestType.toUpperCase()}_${deptAbbr}` : deptAbbr;
+    if (requestType !== "sd") return numberPreview?.irNo || "";
+    const counterKey = `SD_${deptAbbr}`;
     const currentCount = counters[counterKey] || 0;
     const nextCount = currentCount + 1;
     const cleanProject = selectedProject.replace(/\s+/g, "-").toUpperCase();
 
-    if (requestType === "sd") {
-      const firstSheet = sheets[0] || {};
-      const subjectInitials = sdSubject.trim() ? sdSubject.trim().substring(0, 2).toUpperCase() : "XX";
-      const firstType = firstSheet.type || "";
-      const firstLevel = firstSheet.level || "";
-      return `BA-CON-${cleanProject}-SD-${deptAbbr}-${firstType}-${firstLevel}-${subjectInitials}-${nextCount.toString().padStart(3, "0")}`;
-    } else if (requestType === "cpr") {
-      return `BADYA-CON-${cleanProject}-CPR-${nextCount.toString().padStart(3, "0")}`;
-    } else if (["ppir", "tr"].includes(requestType)) {
-      return `BADYA-CON-${cleanProject}-${requestType.toUpperCase()}-${deptAbbr}-${nextCount.toString().padStart(3, "0")}`;
-    } else {
-      return `BADYA-CON-${cleanProject}-IR-${deptAbbr}-${nextCount.toString().padStart(3, "0")}`;
-    }
+    const firstSheet = sheets[0] || {};
+    const subjectInitials = sdSubject.trim() ? sdSubject.trim().substring(0, 2).toUpperCase() : "XX";
+    const firstType = firstSheet.type || "";
+    const firstLevel = firstSheet.level || "";
+    return `BA-CON-${cleanProject}-SD-${deptAbbr}-${firstType}-${firstLevel}-${subjectInitials}-${nextCount.toString().padStart(3, "0")}`;
   };
 
   const NextNumberPreview = () => {
     const nextNumber = getNextNumberPreview();
+    if (requestType !== "sd" && loadingNumberPreview) {
+      return <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50 p-4"><LoadingIndicator label="Calculating the authoritative next number…" /></div>;
+    }
+    if (requestType !== "sd" && numberPreviewError) {
+      return <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">Could not preview the next number: {numberPreviewError}</div>;
+    }
     if (!nextNumber) return null;
     return (
       <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg shadow-sm">
@@ -754,17 +871,6 @@ export default function EngineerPage({ fixedRequestType = "" }) {
 
   return (
     <main className="engineer-workspace min-h-screen pb-10">
-      {toast.show && (
-        <div className={`fixed top-5 right-5 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium animate-in fade-in slide-in-from-top-5 ${
-          toast.type === "error" ? "bg-red-600" : toast.type === "warning" ? "bg-amber-600" : "bg-green-600"
-        }`}>
-          <div className="flex items-center gap-2">
-            {toast.type === "error" ? "❌" : toast.type === "warning" ? "⚠️" : "✅"}
-            {toast.message}
-          </div>
-        </div>
-      )}
-
       <div className={`engineer-form-shell max-w-6xl mx-auto pt-8 px-4 ${requestType === "sd" ? "max-w-[1500px]" : ""}`}>
         {/* Header */}
         <header className="engineer-page-header flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -1022,7 +1128,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
               className={`w-full py-5 rounded-xl text-white font-bold text-lg shadow-xl transition-all transform hover:-translate-y-1 ${
                 saving || !selectedProject || !sdSubject ? "bg-gray-400 cursor-not-allowed" : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700"
               }`}>
-              {saving ? <span className="flex items-center justify-center gap-3"><span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>Submitting...</span> : "📐 Submit Shop Drawing"}
+              {saving ? <LoadingIndicator label="Submitting shop drawing…" compact inverse /> : "📐 Submit Shop Drawing"}
             </button>
           </div>
         ) : (
@@ -1113,7 +1219,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
             <div className="engineer-form-panel bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
               <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2"><span className="w-1.5 h-8 bg-purple-600 rounded-full"></span>Attachments & References</h2>
               <p className="mb-6 text-sm text-slate-500">Keep general IR attachments separate from controlled drawing references used in the document.</p>
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className={`grid grid-cols-1 gap-6 ${requestType === "cpr" ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
                 <div className="space-y-3">
                   <label className="block text-sm font-medium text-gray-700">IR Attachments</label>
                   <div className="flex gap-2">
@@ -1126,6 +1232,26 @@ export default function EngineerPage({ fixedRequestType = "" }) {
                     ))}
                   </div>
                 </div>
+                {["ir", "cpr"].includes(requestType) && (
+                  <label className="block text-sm font-medium text-gray-700">
+                    Checklist <span className="font-normal text-gray-400">(optional)</span>
+                    {loadingChecklists && <span className="mt-3 block"><LoadingIndicator label="Loading department checklists…" compact /></span>}
+                    <select
+                      value={selectedChecklistId}
+                      onChange={(event) => setSelectedChecklistId(event.target.value)}
+                      disabled={loadingChecklists || checklistOptions.length === 0}
+                      className="mt-1 w-full rounded-lg border bg-white p-3 disabled:bg-gray-100 disabled:text-gray-500"
+                    >
+                      <option value="">{loadingChecklists ? "Loading checklists..." : checklistOptions.length ? "No checklist selected" : checklistLoadError ? "Checklist department is not recognized" : "No checklist assigned to your department"}</option>
+                      {checklistOptions.map((option) => <option key={option.id} value={option.id}>{option.number} — {option.name}</option>)}
+                    </select>
+                    <span className="mt-1 block text-xs font-normal text-gray-500">
+                      {checklistLoadError || (checklistOptions.length
+                        ? `${checklistOptions.length} checklist${checklistOptions.length === 1 ? "" : "s"} linked to your department. Choose by number and name.`
+                        : "No checklist templates are assigned to your department.")}
+                    </span>
+                  </label>
+                )}
                 {requestType !== "cpr" && <ReferenceDrawingsInput value={refDrawings} onChange={setRefDrawings} />}
               </div>
               {requestType !== "cpr" && <div className="mt-6 border-t border-gray-100 pt-6">
@@ -1170,15 +1296,15 @@ export default function EngineerPage({ fixedRequestType = "" }) {
               )}
             </div>
 
-            <button onClick={handleSave} disabled={saving || !selectedProject || !selectedLocation || !generalDesc || !(isEditingFinalDesc ? descriptionDraft : finalDescription).trim()}
+            <button onClick={handleSave} disabled={saving || loadingNumberPreview || !numberPreview?.irNo || !selectedProject || !selectedLocation || !generalDesc || !(isEditingFinalDesc ? descriptionDraft : finalDescription).trim()}
               className={`w-full py-5 rounded-xl text-white font-bold text-lg shadow-xl transition-all transform hover:-translate-y-1 ${
-                saving || !selectedProject || !selectedLocation || !generalDesc || !(isEditingFinalDesc ? descriptionDraft : finalDescription).trim() ? "bg-gray-400 cursor-not-allowed" :
+                saving || loadingNumberPreview || !numberPreview?.irNo || !selectedProject || !selectedLocation || !generalDesc || !(isEditingFinalDesc ? descriptionDraft : finalDescription).trim() ? "bg-gray-400 cursor-not-allowed" :
                 requestType === "cpr" ? "bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700" :
                 requestType === "ppir" ? "bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700" :
                 requestType === "tr" ? "bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700" :
                 "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
               }`}>
-              {saving ? "Processing..." : requestType === "cpr" ? "🏗️ Submit CPR Request" :
+              {saving ? <LoadingIndicator label="Submitting request…" compact inverse /> : requestType === "cpr" ? "🏗️ Submit CPR Request" :
                requestType === "ppir" ? "🧱 Submit PPIR" :
                requestType === "tr" ? "🧪 Submit Test Report" : "📋 Submit Inspection Request"}
             </button>
@@ -1191,27 +1317,35 @@ export default function EngineerPage({ fixedRequestType = "" }) {
             <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
               <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-5 text-white">
                 <div className="flex justify-between items-center">
-                  <div><h2 className="text-xl font-bold">Create New Revision</h2><p className="text-amber-100 text-sm mt-1">Add a revision to an existing request</p></div>
+                  <div><h2 className="text-xl font-bold">Create New Revision</h2><p className="text-amber-100 text-sm mt-1">Create a revision with its department checklist</p></div>
                   <button onClick={() => setShowRevModal(false)} className="text-2xl hover:opacity-70">&times;</button>
                 </div>
               </div>
               <div className="p-6 space-y-5">
                 <SearchableInput label="Select Project *" options={projects} value={revProject} onChange={setRevProject} placeholder="Choose project..." />
                 <label className="block font-medium text-gray-700">
-                  Parent {requestType === "cpr" ? "CPR" : "IR"} *
-                  <select value={revParentId} onChange={(event) => setRevParentId(event.target.value)} disabled={!revProject || loadingRevisionParents} className="mt-2 w-full border-2 border-gray-200 rounded-xl p-3 disabled:bg-gray-100">
-                    <option value="">{loadingRevisionParents ? "Loading parent requests..." : revProject ? "Choose the request being revised" : "Select a project first"}</option>
+                  Parent {requestType === "cpr" ? "CPR" : "IR"} <span className="text-xs font-normal text-amber-700">(temporarily disabled)</span>
+                  <select value={revParentId} onChange={(event) => setRevParentId(event.target.value)} disabled={!REV_PARENT_SELECTION_ENABLED || !revProject || loadingRevisionParents} className="mt-2 w-full border-2 border-gray-200 rounded-xl p-3 disabled:bg-gray-100">
+                    <option value="">{!REV_PARENT_SELECTION_ENABLED ? "Parent selection is temporarily disabled" : loadingRevisionParents ? "Loading parent requests..." : revProject ? "Choose the request being revised" : "Select a project first"}</option>
                     {revisionParents.filter((item) => item.project === revProject).map((item) => (
                       <option key={item.id || item.uniqueId} value={item.id || item.uniqueId}>{item.irNo} — {item.desc || item.location || "No description"}</option>
                     ))}
                   </select>
                 </label>
                 <div>
-                  <label className="block font-medium text-gray-700 mb-2"><span className={`text-lg mr-2 ${requestType === "cpr" ? "text-green-600" : "text-blue-600"}`}>{requestType.toUpperCase()}</span> Revision Number *</label>
+                  <label className="block font-medium text-gray-700 mb-2">IR Revision Number *</label>
                   <input type="text" value={revText} onChange={(e) => setRevText(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl p-3" placeholder="e.g., REV-001" />
                 </div>
+                <label className="block font-medium text-gray-700">
+                  Checklist <span className="text-sm font-normal text-gray-400">(optional)</span>
+                  {loadingChecklists && <span className="mt-2 block"><LoadingIndicator label="Loading department checklists…" compact /></span>}
+                  <select value={revChecklistId} onChange={(event) => setRevChecklistId(event.target.value)} disabled={loadingChecklists || checklistOptions.length === 0} className="mt-2 w-full border-2 border-gray-200 rounded-xl p-3 disabled:bg-gray-100">
+                    <option value="">{loadingChecklists ? "Loading checklists..." : checklistOptions.length ? "No checklist selected" : checklistLoadError || "No checklist assigned to your department"}</option>
+                    {checklistOptions.map((option) => <option key={option.id} value={option.id}>{option.number} — {option.name}</option>)}
+                  </select>
+                </label>
                 <div><label className="block font-medium text-gray-700 mb-2">Notes (Optional)</label><textarea value={revNote} onChange={(e) => setRevNote(e.target.value)} className="w-full border-2 border-gray-200 rounded-xl p-3" rows={3} placeholder="Describe what changed..." /></div>
-                <button onClick={handleSaveRev} disabled={revSaving || !revProject || !revParentId || !revText.trim()} className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all disabled:opacity-50">{revSaving ? "Creating..." : "Submit Revision"}</button>
+                <button onClick={handleSaveRev} disabled={revSaving || !revProject || (REV_PARENT_SELECTION_ENABLED && !revParentId) || !revText.trim()} className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all disabled:opacity-50">{revSaving ? <LoadingIndicator label="Creating revision…" compact inverse /> : "Submit Revision"}</button>
               </div>
             </div>
           </div>

@@ -96,6 +96,7 @@ function createRouter() {
     },
     get(routePath, ...handlers) { addRoute("GET", routePath, handlers); return router; },
     post(routePath, ...handlers) { addRoute("POST", routePath, handlers); return router; },
+    put(routePath, ...handlers) { addRoute("PUT", routePath, handlers); return router; },
     delete(routePath, ...handlers) { addRoute("DELETE", routePath, handlers); return router; },
     listen(port, host, callback) {
       const server = http.createServer((req, res) => {
@@ -224,7 +225,7 @@ export function corsMiddleware(origins) {
     }
     if (req.method === "OPTIONS") {
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       res.statusCode = 204;
       res.end();
       return;

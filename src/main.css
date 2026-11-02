@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 .dc-workspace { background: #f3f6fa; color: #17243b; }
 .dc-workspace button, .dc-workspace a, .dc-workspace input, .dc-workspace select { transition: background-color .15s, border-color .15s; }
 .dc-workspace button:not(:disabled), .dc-workspace select { cursor: pointer; }
@@ -313,6 +315,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .dc-project-card-header h3 { margin: 4px 0 0; color: #fff; font-size: 19px; font-weight: 800; }
 .dc-project-card-header > strong { flex: none; font-size: 12px; }
 .dc-project-card-body { display: grid; gap: 17px; padding: 17px; background: #f2f6fa; }
+.dc-discipline-section { overflow: hidden; border: 1px solid #cbd7e4; border-radius: 12px; background: #fff; }
+.dc-discipline-section + .dc-discipline-section { margin-top: 13px; }
+.dc-discipline-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 14px; border-bottom: 1px solid #dce5ef; background: #edf3f8; }
+.dc-discipline-header h5 { margin: 0; color: #193652; font-size: 13px; font-weight: 850; letter-spacing: .04em; }
+.dc-discipline-header span { color: #66778b; font-size: 12px; }
+.dc-discipline-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.dc-discipline-actions button { min-height: 34px; border: 1px solid #b9c8d8; border-radius: 8px; background: #fff; color: #24425f; font-size: 11px; font-weight: 800; padding: 7px 10px; }
+.dc-discipline-actions .dc-archive-action { border-color: #f2c36d; background: #fff8e7; color: #8b5700; }
+.dc-discipline-actions button:disabled { cursor: wait; opacity: .5; }
+.app-notification { position: fixed; z-index: 120; top: 50%; left: 50%; display: flex; width: min(560px, calc(100vw - 28px)); align-items: flex-start; justify-content: space-between; gap: 18px; border: 2px solid; border-radius: 16px; padding: 20px 22px; box-shadow: 0 24px 70px rgb(15 35 60 / .32); transform: translate(-50%, -50%); }
+.app-notification-stack { position: fixed; z-index: 120; top: 50%; left: 50%; display: grid; width: min(560px, calc(100vw - 28px)); gap: 12px; pointer-events: none; transform: translate(-50%, -50%); }
+.app-notification-stack .app-notification { position: static; width: 100%; pointer-events: auto; transform: none; }
+.app-notification strong { display: block; font-size: 16px; }
+.app-notification p { margin: 5px 0 0; color: inherit; font-size: 15px; line-height: 1.55; }
+.app-notification button { flex: none; width: 28px; height: 28px; border: 0; border-radius: 7px; background: rgb(255 255 255 / .55); color: inherit; cursor: pointer; font-size: 20px; line-height: 1; }
+.app-notification--success { border-color: #8bd4b8; background: #eafaf3; color: #075f46; }
+.app-notification--error { border-color: #f0aeb6; background: #fff0f2; color: #9c2534; }
+.app-notification--warning { border-color: #edca77; background: #fff8df; color: #805200; }
+.app-notification--info { border-color: #9ac7ee; background: #eef7ff; color: #15528c; }
+.app-loading { display: inline-flex; align-items: center; justify-content: center; gap: 9px; color: #52657b; font-size: 14px; font-weight: 700; }
+.app-loading__spinner { width: 22px; height: 22px; border: 3px solid #bdd0e3; border-top-color: #1769d1; border-radius: 50%; animation: app-spin .75s linear infinite; }
+.app-loading--compact .app-loading__spinner { width: 15px; height: 15px; border-width: 2px; }
+.app-loading--inverse { color: #fff; }
+.app-loading--inverse .app-loading__spinner { border-color: rgb(255 255 255 / .45); border-top-color: #fff; }
+@keyframes app-spin { to { transform: rotate(360deg); } }
 .dc-type-subsection { overflow: hidden; border: 1px solid #cbd9e6; border-radius: 10px; background: #fff; }
 .dc-type-subsection-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-left: 6px solid #3276bd; border-bottom: 1px solid #dbe4ec; background: #edf5fd; }
 .dc-type-subsection-cpr .dc-type-subsection-header { border-left-color: #16846b; background: #eaf7f2; }
@@ -382,6 +409,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (prefers-reduced-motion: reduce) {
   .app-navigation *, .engineer-workspace *, .records-workspace *, .dc-workspace * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+  .app-loading__spinner { animation: none; border-top-color: #1769d1; }
 }
 @media (max-width: 1250px) {
   .app-nav-links { justify-content: flex-start; overflow-x: auto; scrollbar-width: thin; }
@@ -408,4 +436,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .tr-register-heading { align-items: flex-start; flex-direction: column; }
   .dc-project-cards { padding: 12px; gap: 18px; }
   .dc-project-card-body { padding: 11px; }
+  .dc-discipline-header { align-items: flex-start; flex-direction: column; }
+  .dc-discipline-actions { width: 100%; justify-content: flex-start; }
+  .app-notification, .app-notification-stack { top: 50%; left: 50%; right: auto; }
 }

@@ -21,7 +21,19 @@ import {
 import { cookieParser, corsMiddleware, createApp, jsonMiddleware, Router, staticMiddleware } from "./http-app.js";
 import { getExcelDirectory, listExcelFiles, previewExcelFile, resolveWorkbook } from "./excel-files.js";
 import { createReportWorkbook } from "./report-excel.js";
-import { createWordDocument, getWordTemplateInfo } from "./word.js";
+import { createChecklistDocument, createWordDocument, getWordTemplateInfo } from "./word.js";
+import { compareSerialRecords, serialPriorityScopeKey, serialRequestType } from "../src/utils/serialOrdering.js";
+import {
+  CHECKLIST_DEPARTMENT_TEMPLATE_MAP,
+  CHECKLIST_SETTING_KEY,
+  checklistConfiguration,
+  checklistOptions,
+  checklistWorkflowDepartment,
+  getChecklistCatalogInfo,
+  publicChecklistTemplate,
+  validateChecklistConfiguration,
+  validateChecklistSelection,
+} from "./checklists.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(__dirname, "..");
@@ -32,7 +44,21 @@ const allowedDepartments = new Set(["ARCH", "Civil", "ELECT", "MECH", "SURV"]);
 const allowedRequestTypes = new Set(["ir", "cpr", "sd"]);
 const inspectionRequestTypes = new Set(["IR", "CPR", "PPIR", "TR"]);
 const creatableInspectionRequestTypes = new Set(["IR", "CPR", "TR"]);
+// Temporary compatibility switch. Set this and the matching Engineer UI flag
+// to true when linked Parent IR/CPR selection is restored.
+const REV_PARENT_SELECTION_REQUIRED = false;
 const projectArchiveRequestTypes = new Set(["IR", "CPR", "TR"]);
+const bulkDisciplineAliases = new Map([
+  ["ARCH", "ARCH"],
+  ["ST", "Civil"],
+  ["CIVIL", "Civil"],
+  ["ELEC", "ELECT"],
+  ["ELECT", "ELECT"],
+  ["MEP", "MECH"],
+  ["MECH", "MECH"],
+  ["SUR", "SURV"],
+  ["SURV", "SURV"],
+]);
 
 function canonicalDepartment(value) {
   const raw = String(value || "").trim();
@@ -43,6 +69,11 @@ function canonicalDepartment(value) {
 function documentDepartmentCode(value) {
   const department = canonicalDepartment(value);
   return department === "Civil" ? "ST" : department;
+}
+
+function canonicalBulkDepartment(value) {
+  const raw = String(value || "").trim();
+  return bulkDisciplineAliases.get(raw.toUpperCase()) || canonicalDepartment(raw);
 }
 const sessionCookie = "contech_session";
 
@@ -138,6 +169,10 @@ function configuredLocations(project) {
   return typesMap;
 }
 
+function currentChecklistConfiguration(templates) {
+  return checklistConfiguration(getSetting(CHECKLIST_SETTING_KEY, null), templates);
+}
+
 function locationTypeFor(item, cache) {
   const project = String(item.project || "");
   if (cache && !cache.has(project)) cache.set(project, configuredLocations(project));
@@ -174,6 +209,20 @@ function allDocuments({ archived } = {}) {
   );
 }
 
+function withRecordAttribution(items) {
+  const users = new Map(db.prepare("SELECT username, fullname FROM users").all()
+    .map((user) => [String(user.username || "").toLowerCase(), user]));
+  const identity = (username) => {
+    const user = users.get(String(username || "").toLowerCase());
+    return user?.fullname || user?.username || "Unknown";
+  };
+  return items.map((item) => ({
+    ...item,
+    requesterName: identity(item.user),
+    ...(item.archivedBy ? { archivedByName: identity(item.archivedBy) } : {}),
+  }));
+}
+
 function projectRequestArchiveCriteria(body = {}) {
   const requestedProject = String(body.project || "").trim();
   if (!requestedProject) return { error: "Project is required", status: 400 };
@@ -183,14 +232,27 @@ function projectRequestArchiveCriteria(body = {}) {
   if (!projectArchiveRequestTypes.has(requestType)) {
     return { error: "Request type must be IR, CPR, or TR", status: 400 };
   }
-  return { project, requestType, label: `${requestType} records for Project ${project}` };
+  const requestedDepartment = String(body.department || "").trim();
+  const department = requestedDepartment
+    ? bulkDisciplineAliases.get(requestedDepartment.toUpperCase())
+    : "";
+  if (requestedDepartment && !department) {
+    return { error: "Discipline must be ARCH, ST/Civil, ELEC, MEP, or SUR", status: 400 };
+  }
+  return {
+    project,
+    requestType,
+    department,
+    label: `${requestType} records${department ? ` for ${department}` : ""} in Project ${project}`,
+  };
 }
 
-function eligibleProjectRequestArchiveItems({ project, requestType }) {
+function eligibleProjectRequestArchiveItems({ project, requestType, department }) {
   return listItems("irs", { includeArchived: false })
     .filter((item) => !isPpirRecord(item))
     .filter((item) => String(item.project || "") === project)
     .filter((item) => documentType(item) === requestType)
+    .filter((item) => !department || canonicalBulkDepartment(item.department) === department)
     .map((item) => ({ collection: "irs", item }));
 }
 
@@ -228,7 +290,8 @@ function filterDocuments(items, query) {
   return items.filter((item) => {
     if (requestedType !== "ALL" && !(requestedType === "IR_CPR" ? ["IR", "CPR"].includes(documentType(item)) : documentType(item) === requestedType)) return false;
     if (query.project && query.project !== "all" && item.project !== query.project) return false;
-    if (query.department && query.department !== "all" && String(item.department || "") !== String(query.department)) return false;
+    if (query.department && query.department !== "all" && canonicalDepartment(item.department) !== canonicalDepartment(query.department)) return false;
+    if (query.requester && query.requester !== "all" && String(item.user || "").toLowerCase() !== String(query.requester).toLowerCase()) return false;
     if (query.archivedBy && query.archivedBy !== "all" && item.archivedBy !== query.archivedBy) return false;
     if (query.action === "none" && item.action) return false;
     if (query.action && !["all", "none"].includes(query.action) && String(item.action || "") !== String(query.action)) return false;
@@ -255,9 +318,13 @@ function filterDocuments(items, query) {
         boundary.setMonth(now.getMonth() - 1);
         if (date < boundary) return false;
       }
+      if (query.dateRange === "year") {
+        boundary.setFullYear(now.getFullYear() - 1);
+        if (date < boundary) return false;
+      }
     }
     if (!search) return true;
-    return [item.irNo, item.revNo, item.sdNo, item.project, item.department, item.desc, item.revNote, item.subject, item.location, item.user]
+    return [item.irNo, item.revNo, item.sdNo, item.project, item.department, item.desc, item.revNote, item.subject, item.location, item.user, item.requesterName, item.archivedBy, item.archivedByName]
       .some((value) => String(value || "").toLowerCase().includes(search));
   });
 }
@@ -306,6 +373,7 @@ function filterOptions(items) {
     projects: [...new Set(items.map((item) => item.project).filter(Boolean))].sort(),
     departments: [...new Set(items.map((item) => item.department).filter(Boolean))].sort(),
     archivedBy: [...new Set(items.map((item) => item.archivedBy).filter(Boolean))].sort(),
+    requesters: [...new Set(items.map((item) => item.user).filter(Boolean))].sort(),
     locations: [...new Set(items.map((item) => item.location || item.floor).filter(Boolean))].sort(),
     actions: [...new Set(items.map((item) => item.action).filter(Boolean))].sort(),
   };
@@ -632,6 +700,62 @@ api.get("/locations", (req, res) => {
   res.json({ locations: [...new Set(locations)], types_map: typesMap });
 });
 
+api.get("/checklists/options", (req, res) => {
+  try {
+    const catalog = getChecklistCatalogInfo();
+    const configuration = currentChecklistConfiguration(catalog.templates);
+    const department = req.user.role === "engineer" ? req.user.department : req.query.department;
+    const requestType = String(req.query.requestType || "").toUpperCase();
+    res.json({
+      options: checklistOptions({ requestType, department, configuration, approvedTemplates: catalog.templates }),
+      department: checklistWorkflowDepartment(department),
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+});
+
+api.get("/admin/checklists", requireAdmin, (_req, res) => {
+  try {
+    const catalog = getChecklistCatalogInfo();
+    res.json({
+      entries: currentChecklistConfiguration(catalog.templates).entries,
+      templates: catalog.templates.map(publicChecklistTemplate),
+      mapping: CHECKLIST_DEPARTMENT_TEMPLATE_MAP,
+      invalidTemplates: catalog.invalidTemplates,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+});
+
+api.put("/admin/checklists", requireAdmin, (req, res) => {
+  try {
+    const catalog = getChecklistCatalogInfo();
+    const configuration = validateChecklistConfiguration(req.body, catalog.templates);
+    setSetting(CHECKLIST_SETTING_KEY, configuration);
+    res.json({ success: true, entries: configuration.entries });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+});
+
+api.get("/irs/next-number", (req, res) => {
+  try {
+    const project = String(req.query.project || "").trim();
+    if (!project) return res.status(400).json({ error: "Project is required" });
+    const requestType = String(req.query.requestType || "IR").trim().toUpperCase();
+    if (!creatableInspectionRequestTypes.has(requestType)) return res.status(400).json({ error: "Invalid request type" });
+    if (req.user.role === "engineer" && !publicUser(req.user).allowedRequestTypes.includes(requestType.toLowerCase())) {
+      return res.status(403).json({ error: `You are not allowed to create ${requestType} requests` });
+    }
+    const department = req.user.role === "engineer" ? req.user.department : req.query.department;
+    res.json(nextInspectionNumberPreview(project, requestType, department));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 api.get("/sd-types", (req, res) => {
   const rules = getSetting("location_rules", {})[String(req.query.project || "")]?.rules || [];
   res.json({ types: [...new Set(rules.map((rule) => rule.type).filter(Boolean))] });
@@ -754,6 +878,41 @@ function projectCode(value) {
   return String(value || "PROJECT").trim().replace(/\s+/g, "-").toUpperCase();
 }
 
+function inspectionCounterKey(requestType, department) {
+  const type = String(requestType || "IR").trim().toUpperCase();
+  const canonical = canonicalDepartment(department || "Civil");
+  if (type === "IR") return canonical;
+  if (type === "CPR") return "CPR";
+  return `${type}_${canonical}`;
+}
+
+function inspectionDocumentNumber(project, requestType, department, serial) {
+  const type = String(requestType || "IR").trim().toUpperCase();
+  const departmentCode = documentDepartmentCode(canonicalDepartment(department || "Civil"));
+  const suffix = String(serial).padStart(3, "0");
+  return type === "CPR"
+    ? `BADYA-CON-${projectCode(project)}-CPR-${suffix}`
+    : `BADYA-CON-${projectCode(project)}-${type}-${departmentCode}-${suffix}`;
+}
+
+function nextInspectionNumberPreview(projectName, requestType, department) {
+  const projects = listProjects();
+  const project = projects[projectName];
+  if (!project) throw new Error("Select an existing project");
+  const type = String(requestType || "IR").trim().toUpperCase();
+  if (!creatableInspectionRequestTypes.has(type)) throw new Error("Invalid request type");
+  const counterKey = inspectionCounterKey(type, department);
+  const serialNumber = Number(project.counters?.[counterKey] || 0) + 1;
+  return {
+    project: projectName,
+    requestType: type,
+    department: canonicalDepartment(department || "Civil"),
+    counterKey,
+    serialNumber,
+    irNo: inspectionDocumentNumber(projectName, type, department, serialNumber),
+  };
+}
+
 function optionalReference(value, field) {
   const normalized = String(value || "").trim();
   if (normalized.length > 500) throw new Error(`${field} must be 500 characters or fewer`);
@@ -811,6 +970,7 @@ function duplicateSerialRequests(item) {
   return listItems("irs")
     .filter((other) => other.id !== item.id
       && other.project === item.project
+      && serialRequestType(other) === serialRequestType(item)
       && Number(other.serialNumber) === Number(item.serialNumber))
     .map((other) => ({ id: other.id, irNo: other.irNo, requestType: other.requestType || (other.isCPR ? "CPR" : "IR") }));
 }
@@ -821,35 +981,66 @@ function revisionNumberFor(parentDocumentId) {
     .reduce((highest, revision) => Math.max(highest, Number(revision.revisionNumber) || 0), 0) + 1;
 }
 
+function standaloneRevisionNumberFor(project, parentRequestType) {
+  const highest = listItems("revs")
+    .filter((revision) => !revision.parentDocumentId)
+    .filter((revision) => String(revision.project || "").trim() === String(project || "").trim())
+    .filter((revision) => String(revision.parentRequestType || "IR").toUpperCase() === parentRequestType)
+    .reduce((maximum, revision) => Math.max(maximum, Number(revision.revisionNumber) || 0), 0);
+  return highest + 1;
+}
+
 function createRevisionForParent(body, { actionSourceId = "" } = {}) {
   const parentDocumentId = String(body.parentDocumentId || "").trim();
-  const parent = findItem("irs", parentDocumentId);
-  if (!parent) throw new Error("A valid parent IR or CPR is required");
-  if (String(body.project || "").trim() !== String(parent.project || "").trim()) throw new Error("Revision project must match its parent document");
-  const parentRequestType = String(parent.requestType || (parent.isCPR ? "CPR" : "IR")).toUpperCase();
-  if (body.parentRequestType && String(body.parentRequestType).toUpperCase() !== parentRequestType) {
+  if (REV_PARENT_SELECTION_REQUIRED && !parentDocumentId) throw new Error("A parent IR or CPR is required");
+  const parent = parentDocumentId ? findItem("irs", parentDocumentId) : null;
+  if (parentDocumentId && !parent) throw new Error("The selected parent IR or CPR is invalid");
+  if (parent && String(body.project || "").trim() !== String(parent.project || "").trim()) throw new Error("Revision project must match its parent document");
+  const parentRequestType = String(parent?.requestType || (parent?.isCPR ? "CPR" : body.parentRequestType || "IR")).toUpperCase();
+  if (!["IR", "CPR"].includes(parentRequestType)) throw new Error("Revision type must be IR or CPR");
+  if (parent && body.parentRequestType && String(body.parentRequestType).toUpperCase() !== parentRequestType) {
     throw new Error("Revision type must match its parent document");
   }
   if (actionSourceId) {
     const existing = listItems("revs").find((revision) => revision.actionSourceId === actionSourceId);
     if (existing) return { item: existing, created: false };
   }
-  const revisionNumber = revisionNumberFor(parentDocumentId);
+  const project = String(parent?.project || body.project || "").trim();
+  const department = parent?.department || body.department || "";
+  const revisionNumber = parent
+    ? revisionNumberFor(parentDocumentId)
+    : standaloneRevisionNumberFor(project, parentRequestType);
   const id = crypto.randomUUID();
   const now = timestamp();
-  const revisionLabel = String(body.revText || `R${revisionNumber}`).trim().slice(0, 80) || `R${revisionNumber}`;
+  const revisionLabel = String(body.revText || "").trim().slice(0, 80);
+  if (!revisionLabel) throw new Error("IR Revision Number is required");
+  const checklistCatalog = getChecklistCatalogInfo();
+  const selectedChecklist = validateChecklistSelection({
+    checklistId: body.checklistId,
+    requestType: parentRequestType,
+    department,
+    location: body.location,
+    configuration: currentChecklistConfiguration(checklistCatalog.templates),
+    approvedTemplates: checklistCatalog.templates,
+    requireLocation: false,
+  });
+  const standaloneNumber = `${projectCode(project)}-${parentRequestType}-REV-${String(revisionNumber).padStart(3, "0")}`;
   const item = saveItem("revs", {
     ...body,
     id,
     uniqueId: id,
-    project: parent.project,
-    department: parent.department || body.department || "",
-    parentDocumentId,
-    parentDocumentNumber: parent.irNo || "",
+    project,
+    department,
+    ...(parent ? { parentDocumentId, parentDocumentNumber: parent.irNo || "" } : {}),
     parentRequestType,
+    ...(selectedChecklist ? {
+      checklistId: selectedChecklist.id,
+      checklistName: selectedChecklist.name,
+      checklistNumber: selectedChecklist.number,
+    } : { checklistId: undefined, checklistName: undefined, checklistNumber: undefined }),
     actionSourceId: actionSourceId || undefined,
     revisionNumber,
-    revNo: `${parent.irNo || projectCode(parent.project)}-REV-${String(revisionNumber).padStart(3, "0")}`,
+    revNo: parent ? `${parent.irNo || projectCode(project)}-REV-${String(revisionNumber).padStart(3, "0")}` : standaloneNumber,
     displayNumber: `REV-${parentRequestType}-${String(revisionNumber).padStart(3, "0")}`,
     userRevNumber: revisionLabel,
     isRevision: true,
@@ -864,6 +1055,10 @@ function createRevisionForParent(body, { actionSourceId = "" } = {}) {
 function createWorkItem(collection, body) {
   const id = crypto.randomUUID();
   const now = timestamp();
+  const requestedChecklistId = body.checklistId;
+  const requestedNumberPreview = String(body.expectedIrNo || "").trim();
+  const { checklistTemplatePath: _checklistTemplatePath, checklistPath: _checklistPath, checklistName: _checklistName, expectedIrNo: _expectedIrNo, ...safeBody } = body;
+  body = safeBody;
   if (collection === "irs") {
     const requestType = String(body.requestType || "IR").toUpperCase();
     if (!creatableInspectionRequestTypes.has(requestType)) throw new Error("Invalid request type");
@@ -896,16 +1091,39 @@ function createWorkItem(collection, body) {
         receivedDate: cairoDate(),
       };
     }
+    const checklistCatalog = getChecklistCatalogInfo();
+    const selectedChecklist = validateChecklistSelection({
+      checklistId: requestedChecklistId,
+      requestType,
+      department: body.department,
+      location: body.location,
+      configuration: currentChecklistConfiguration(checklistCatalog.templates),
+      approvedTemplates: checklistCatalog.templates,
+    });
+    if (selectedChecklist && !Object.hasOwn(configuredLocations(body.project), String(body.location || "").trim())) {
+      const error = new Error("Select a configured Location for this project before choosing a checklist");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (selectedChecklist) {
+      body = { ...body, checklistId: selectedChecklist.id, checklistName: selectedChecklist.name };
+    } else {
+      const { checklistId: _checklistId, ...withoutChecklist } = body;
+      body = withoutChecklist;
+    }
     const department = canonicalDepartment(body.department || "Civil");
-    const departmentCode = documentDepartmentCode(department);
-    const counterKey = requestType === "IR"
-      ? department
-      : requestType === "CPR" ? "CPR" : `${requestType}_${department}`;
+    if (requestedNumberPreview) {
+      const currentPreview = nextInspectionNumberPreview(body.project, requestType, department);
+      if (currentPreview.irNo !== requestedNumberPreview) {
+        const error = new Error(`The next number changed to ${currentPreview.irNo}. Review the updated preview and submit again.`);
+        error.statusCode = 409;
+        error.preview = currentPreview;
+        throw error;
+      }
+    }
+    const counterKey = inspectionCounterKey(requestType, department);
     const serial = nextCounter(body.project, counterKey);
-    const suffix = String(serial).padStart(3, "0");
-    const irNo = requestType === "CPR"
-      ? `BADYA-CON-${projectCode(body.project)}-CPR-${suffix}`
-      : `BADYA-CON-${projectCode(body.project)}-${requestType}-${departmentCode}-${suffix}`;
+    const irNo = inspectionDocumentNumber(body.project, requestType, department, serial);
     const inspection = normalizedInspectionPayload(body);
     return saveItem(collection, {
       ...inspection, id, uniqueId: id, irNo, serialNumber: serial, requestType,
@@ -931,7 +1149,6 @@ function createWorkItem(collection, body) {
 api.get("/dc/queue", requireDocumentControl, (req, res) => {
   const allItems = allDocuments({ archived: false }).filter((item) => documentType(item) !== "SD");
   const filtered = filterDocuments(allItems, req.query);
-  const sortDirection = String(req.query.sort || "oldest").toLowerCase() === "newest" ? -1 : 1;
   const group = String(req.query.group || "").toLowerCase();
   const projectTypeOrder = ["IR", "CPR", "TR", "REVISION", "SD"];
   filtered.sort((a, b) => {
@@ -945,7 +1162,7 @@ api.get("/dc/queue", requireDocumentControl, (req, res) => {
         : group === "project" ? projectOrder
           : group === "type-project" ? typeOrder || projectOrder
             : group === "type" ? typeOrder : 0;
-    return groupOrder || sortDirection * (new Date(documentDate(a) || 0) - new Date(documentDate(b) || 0));
+    return groupOrder || compareSerialRecords(a, b);
   });
   const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 25, 1), 100);
   const page = Math.max(Number(req.query.page) || 1, 1);
@@ -1006,7 +1223,10 @@ for (const collection of allowedCollections) {
         ...(collection === "irs" ? { duplicateSerialRequests: duplicateSerialRequests(item) } : {}),
       });
     } catch (error) {
-      if (["Invalid request type", "Location is required", "Select a configured location for this project", "Category is required", "Description is required", "Description must be 250 characters or fewer", "Select a configured TR description", "Test Age must be 7 Days or 28 Days", "Received date is required", "A valid parent IR or CPR is required", "Revision project must match its parent document", "Revision type must match its parent document", "refDrawings can contain at most 20 references", "Each refDrawings value must be 250 characters or fewer"].includes(error.message) || /^refMethod must be 500 characters or fewer$/.test(error.message)) {
+      if (error.statusCode === 409) {
+        return res.status(409).json({ error: error.message, preview: error.preview });
+      }
+      if (error.statusCode === 400 || ["Invalid request type", "Location is required", "Select a configured location for this project", "Category is required", "Description is required", "Description must be 250 characters or fewer", "Select a configured TR description", "Test Age must be 7 Days or 28 Days", "Received date is required", "A parent IR or CPR is required", "The selected parent IR or CPR is invalid", "Revision project must match its parent document", "Revision type must match its parent document", "Revision type must be IR or CPR", "IR Revision Number is required", "refDrawings can contain at most 20 references", "Each refDrawings value must be 250 characters or fewer"].includes(error.message) || /^refMethod must be 500 characters or fewer$/.test(error.message)) {
         return res.status(400).json({ error: error.message });
       }
       throw error;
@@ -1058,6 +1278,20 @@ api.post("/archive/project-requests", requireDocumentControl, (req, res) => {
   });
 });
 
+api.post("/copy/project-requests", requireDocumentControl, (req, res) => {
+  const criteria = projectRequestArchiveCriteria(req.body);
+  if (criteria.error) return res.status(criteria.status).json({ error: criteria.error });
+  const records = eligibleProjectRequestArchiveItems(criteria)
+    .map(({ item }) => ({ ...item, requestType: documentType(item), locationType: locationTypeFor(item) }))
+    .sort(compareSerialRecords);
+  return res.json({
+    success: true,
+    count: records.length,
+    records: withRecordAttribution(records),
+    ...criteria,
+  });
+});
+
 api.post("/unarchive", requireDocumentControl, (req, res) => {
   const collection = String(req.body.collection || (req.body.isRevision ? "revs" : "irs"));
   if (!allowedCollections.has(collection)) return res.status(400).json({ error: "Invalid collection" });
@@ -1070,10 +1304,10 @@ api.post("/unarchive", requireDocumentControl, (req, res) => {
   res.json({ success: true, item: saveItem(collection, restored) });
 });
 
-api.get("/archive/dc", (req, res) => {
-  const allItems = allDocuments({ archived: true });
+api.get("/archive/dc", requireDocumentControl, (req, res) => {
+  const allItems = withRecordAttribution(allDocuments({ archived: true }));
   const archive = filterDocuments(allItems, req.query);
-  archive.sort((a, b) => new Date(b.archivedAt || documentDate(b) || 0) - new Date(a.archivedAt || documentDate(a) || 0));
+  archive.sort(compareSerialRecords);
   const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 25, 1), 100);
   const requestedPage = Math.max(Number(req.query.page) || 0, 0);
   let cursorOffset = 0;
@@ -1122,24 +1356,64 @@ api.post("/update-action", requireDocumentControl, (req, res) => {
 });
 
 api.post("/irs/update-ir-number", requireDocumentControl, (req, res) => {
-  const item = findItem("irs", req.body.uniqueId || req.body.id);
+  const id = String(req.body.uniqueId || req.body.id || "").trim();
+  const item = findItem("irs", id);
   if (!item) return res.status(404).json({ error: "Item not found" });
-  const serial = Number(req.body.newSerial);
-  if (!Number.isInteger(serial) || serial < 1) return res.status(400).json({ error: "Invalid serial number" });
-  const code = projectCode(req.body.project || item.project);
-  const department = canonicalDepartment(req.body.department || item.department || "Civil");
-  const departmentCode = documentDepartmentCode(department);
-  const requestType = String(req.body.requestType || item.requestType || "IR").toUpperCase();
+  const serialInput = req.body.newSerial;
+  const serial = Number(serialInput);
+  if ((typeof serialInput !== "number" && !/^\d+$/.test(String(serialInput || "").trim()))
+    || !Number.isSafeInteger(serial) || serial < 1) {
+    return res.status(400).json({ error: "Invalid serial number" });
+  }
+  const requestType = serialRequestType(item);
   if (!inspectionRequestTypes.has(requestType)) return res.status(400).json({ error: "Invalid request type" });
-  const irNo = requestType === "CPR"
-    ? `BADYA-CON-${code}-CPR-${String(serial).padStart(3, "0")}`
-    : `BADYA-CON-${code}-${requestType}-${departmentCode}-${String(serial).padStart(3, "0")}`;
-  const updated = saveItem("irs", { ...item, irNo, serialNumber: serial });
+  let updated;
+  let irNo;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = findItem("irs", id);
+    if (!current) {
+      db.exec("ROLLBACK");
+      return res.status(404).json({ error: "Item not found" });
+    }
+    const currentType = serialRequestType(current);
+    if (!inspectionRequestTypes.has(currentType)) {
+      db.exec("ROLLBACK");
+      return res.status(400).json({ error: "Invalid request type" });
+    }
+    const code = projectCode(current.project);
+    const departmentCode = documentDepartmentCode(current.department || "Civil");
+    irNo = currentType === "CPR"
+      ? `BADYA-CON-${code}-CPR-${String(serial).padStart(3, "0")}`
+      : `BADYA-CON-${code}-${currentType}-${departmentCode}-${String(serial).padStart(3, "0")}`;
+    const priorities = getSetting("serial_order_priorities", {});
+    for (const [key, priorityId] of Object.entries(priorities)) {
+      if (priorityId === current.id) delete priorities[key];
+    }
+    priorities[serialPriorityScopeKey({ ...current, serialNumber: serial })] = current.id;
+    setSetting("serial_order_priorities", priorities);
+    updated = saveItem("irs", {
+      ...current,
+      irNo,
+      serialNumber: serial,
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* The transaction may already be closed. */ }
+    throw error;
+  }
   res.json({ success: true, irNo, item: updated, duplicateSerialRequests: duplicateSerialRequests(updated) });
 });
 
 async function sendWord(res, item, title) {
-  const buffer = await createWordDocument(item, title);
+  let buffer;
+  try {
+    buffer = await createWordDocument(item, title);
+  } catch (error) {
+    const generationError = new Error(`Word document generation failed: ${error.message}`);
+    generationError.statusCode = 422;
+    throw generationError;
+  }
   const filename = String(item.irNo || item.sdNo || "contech-document").replace(/[^a-z0-9._-]/gi, "-");
   res.set({
     "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1151,10 +1425,19 @@ async function sendWord(res, item, title) {
 }
 
 api.post("/generate-word", async (req, res, next) => {
-  if (String(req.body.requestType || "").toUpperCase() === "PPIR") {
-    return res.status(410).json({ error: "PPIR is currently disabled" });
-  }
-  try { await sendWord(res, req.body, "Inspection Request"); } catch (error) { next(error); }
+  try {
+    const id = String(req.body.uniqueId || req.body.id || "").trim();
+    const collection = id && [...allowedCollections].find((name) => findItem(name, id));
+    const storedItem = collection && findItem(collection, id);
+    const item = storedItem?.checklistId || req.body.checklistId ? (storedItem || req.body) : req.body;
+    if (String(item.requestType || "").toUpperCase() === "PPIR") {
+      return res.status(410).json({ error: "PPIR is currently disabled" });
+    }
+    if (item.checklistId && !storedItem) {
+      return res.status(400).json({ error: "A stored request is required to generate a checklist document" });
+    }
+    await sendWord(res, item, "Inspection Request");
+  } catch (error) { next(error); }
 });
 
 api.post("/dc/documents/:id/word", requireDocumentControl, async (req, res, next) => {
@@ -1163,20 +1446,35 @@ api.post("/dc/documents/:id/word", requireDocumentControl, async (req, res, next
     const item = collection && findItem(collection, req.params.id);
     if (!item) return res.status(404).json({ error: "Document not found" });
     if (isPpirRecord(item)) return res.status(410).json({ error: "PPIR is currently disabled" });
-    const isCpr = documentType(item) === "CPR";
-    const part = String(req.body.part || (isCpr ? "cover" : "main"));
-    if (!(isCpr ? ["cover", "checklist"] : ["main"]).includes(part)) {
-      return res.status(400).json({ error: "Invalid document download part" });
+    if (req.body.part && String(req.body.part) !== "main") {
+      return res.status(400).json({ error: "Separate cover and checklist downloads are no longer supported" });
     }
-    const buffer = await createWordDocument(item, "Contech Document", part);
-    const wordDownloads = { ...(item.wordDownloads || {}), [part]: { at: timestamp(), by: req.user.username } };
-    const complete = isCpr ? Boolean(wordDownloads.cover && wordDownloads.checklist) : true;
-    saveItem(collection, { ...item, wordDownloads, isDone: item.isDone || complete,
+    const buffer = await createWordDocument(item, "Contech Document");
+    const wordDownloads = { ...(item.wordDownloads || {}), document: { at: timestamp(), by: req.user.username } };
+    saveItem(collection, { ...item, wordDownloads, isDone: true,
       downloadedAt: timestamp(), downloadedBy: req.user.username });
-    const suffix = isCpr ? `-${part}` : "";
-    const filename = `${item.irNo || item.revNo || item.sdNo}${suffix}.docx`.replace(/[^a-z0-9._-]/gi, "-");
+    const filename = `${item.irNo || item.revNo || item.sdNo}.docx`.replace(/[^a-z0-9._-]/gi, "-");
     res.set({ "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "Content-Disposition": `attachment; filename="${filename}"`, "X-Contech-Template": buffer.templateName });
+    res.send(buffer);
+  } catch (error) { next(error); }
+});
+
+api.post("/dc/documents/:id/checklist", requireDocumentControl, async (req, res, next) => {
+  try {
+    const item = findItem("revs", req.params.id);
+    if (!item || !item.isRevision) return res.status(404).json({ error: "Revision not found" });
+    if (!item.checklistId) return res.status(400).json({ error: "This revision does not have a selected checklist" });
+    const buffer = await createChecklistDocument(item);
+    const wordDownloads = { ...(item.wordDownloads || {}), checklist: { at: timestamp(), by: req.user.username } };
+    saveItem("revs", { ...item, wordDownloads });
+    const filename = `${item.userRevNumber || item.revNo || item.id}-checklist.docx`.replace(/[^a-z0-9._-]/gi, "-");
+    res.set({
+      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(buffer.length),
+      "X-Contech-Template": buffer.templateName || "",
+    });
     res.send(buffer);
   } catch (error) { next(error); }
 });
@@ -1337,12 +1635,7 @@ function visibleEngineerRecords(req) {
     .filter((item) => ["IR", "CPR"].includes(documentType(item))
       && String(item.user || "").toLowerCase() === String(req.user.username || "").toLowerCase())
     .map((item) => item.project));
-  return [
-    ...listItems("irs", { includeArchived: false }),
-    ...listItems("revs", { includeArchived: false }),
-    ...listItems("shopdrawings", { includeArchived: false }),
-  ]
-    .filter((item) => !isPpirRecord(item))
+  return allDocuments({ archived: false })
     .filter((item) => documentType(item) === "TR"
       ? ownProjects.has(item.project)
       : String(item.user || "").toLowerCase() === String(req.user.username || "").toLowerCase());
@@ -1356,23 +1649,35 @@ function requireEngineerRecords(req, res, next) {
 }
 
 api.get("/engineer/filter-options", requireAuth, requireEngineerRecords, (req, res) => {
-  const records = visibleEngineerRecords(req);
-  const projects = [...new Set(records.map((item) => item.project).filter(Boolean))].sort();
-  res.json({ projects });
+  const records = withRecordAttribution(visibleEngineerRecords(req));
+  res.json(filterOptions(records));
 });
 
 api.get("/engineer/records/page", requireAuth, requireEngineerRecords, (req, res) => {
   const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 50, 1), 200);
-  let offset = 0;
-  try { offset = Number(JSON.parse(String(req.query.cursors || "{}")).offset || 0); } catch { offset = 0; }
-  let records = visibleEngineerRecords(req);
+  const requestedPage = Math.max(Number(req.query.page) || 0, 0);
+  let cursorOffset = 0;
+  try { cursorOffset = Number(JSON.parse(String(req.query.cursors || "{}")).offset || 0); } catch { cursorOffset = 0; }
+  const offset = requestedPage > 0 ? (requestedPage - 1) * pageSize : cursorOffset;
+  const allRecords = withRecordAttribution(visibleEngineerRecords(req));
+  let records = filterDocuments(allRecords, req.query);
   if (req.query.todayOnly === "true") {
     const today = new Date().toISOString().slice(0, 10);
     records = records.filter((item) => String(item.sentAt || item.createdAt || "").startsWith(today));
   }
-  records.sort((a, b) => new Date(b.sentAt || b.createdAt || 0) - new Date(a.sentAt || a.createdAt || 0));
+  records.sort(compareSerialRecords);
   const page = records.slice(offset, offset + pageSize);
-  res.json({ records: page, cursors: { offset: offset + page.length }, hasMore: offset + page.length < records.length });
+  res.json({
+    records: page,
+    cursors: { offset: offset + page.length },
+    hasMore: offset + page.length < records.length,
+    page: requestedPage || Math.floor(offset / pageSize) + 1,
+    pageSize,
+    total: records.length,
+    totalPages: Math.max(Math.ceil(records.length / pageSize), 1),
+    summary: summarizeDocuments(records),
+    filters: filterOptions(allRecords),
+  });
 });
 
 api.get("/admin/system-info", requireAdmin, (_req, res) => {
@@ -1401,7 +1706,8 @@ if (fs.existsSync(frontendDirectory)) {
 app.use((req, res) => res.status(404).json({ error: "Route not found" }));
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({ error: process.env.NODE_ENV === "production" ? "Internal server error" : error.message });
+  const status = Number(error.statusCode) || 500;
+  res.status(status).json({ error: status < 500 || process.env.NODE_ENV !== "production" ? error.message : "Internal server error" });
 });
 
 const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

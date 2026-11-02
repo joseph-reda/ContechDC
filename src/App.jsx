@@ -4,6 +4,7 @@ import { API_URL } from "./config.js";
 
 // Components
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
+import { FeedbackProvider } from "./components/Feedback.jsx";
 
 // Pages
 const LoginPage = lazy(() => import("./pages/LoginPage.jsx"));
@@ -92,7 +93,7 @@ export default function App() {
     };
 
     return (
-        <>
+        <FeedbackProvider>
             {/* Navbar - Show only when user is logged in and not on login page */}
             {user && !["/admin", "/login"].includes(location.pathname) && <Navbar user={user} onLogout={handleLogout} />}
 
@@ -304,6 +305,6 @@ export default function App() {
                 />
             </Routes>
             </Suspense>
-        </>
+        </FeedbackProvider>
     );
 }

@@ -1,9 +1,8 @@
 // src/components/admin/DCModeTab.jsx
 import React, { useEffect, useState, useCallback, useMemo, useRef, memo } from "react";
-import { archiveProjectRequests, archiveProjectRequestsConfirmation, previewProjectRequestsArchive, projectRequestArchiveKey } from "../../archiveService";
+import { archiveProjectRequests, archiveProjectRequestsConfirmation, copyProjectRequests, previewProjectRequestsArchive, projectRequestArchiveKey } from "../../archiveService";
 import { API_URL } from "../../config";
 import { copyAllRows, displayedDescription } from "../../excelClipboardService";
-import { rowsInProjectTypeSection } from "../../utils/dcSections";
 import DcProjectSections from "../dc/DcProjectSections";
 
 // ==============================
@@ -792,14 +791,14 @@ export default function DCModeTab({ user }) {
     return data;
   }, [currentData, searchTerm, projectFilter, departmentFilter, statusFilter, typeFilter, sortBy, sortOrder, activeView]);
 
-  const copySection = async (project, type, sectionItems) => {
+  const copySection = async (project, type, department = "") => {
     if (copyingGroup) return;
-    setCopyingGroup(JSON.stringify([project, type]));
+    setCopyingGroup(JSON.stringify([project, type, department]));
     try {
-      const records = rowsInProjectTypeSection(sectionItems, project, type);
-      if (!records.length) throw new Error("No records are displayed in this section");
+      const { records = [] } = await copyProjectRequests(API_URL, project, type, department);
+      if (!records.length) throw new Error("No records are available in this section");
       await copyAllRows(records);
-      showToast(`${records.length} ${type} rows copied from ${project || "Unassigned"}`);
+      showToast(`${records.length} ${type}${department ? ` — ${department}` : ""} rows copied from ${project || "Unassigned"}`);
     } catch (error) {
       showToast(error.message || "Copy failed", "error");
     } finally {
@@ -807,21 +806,21 @@ export default function DCModeTab({ user }) {
     }
   };
 
-  const handleArchiveProjectRequests = async (project, requestType) => {
+  const handleArchiveProjectRequests = async (project, requestType, department = "") => {
     if (archiveOperation.current) return;
-    const key = projectRequestArchiveKey(project, requestType);
+    const key = projectRequestArchiveKey(project, requestType, department);
     archiveOperation.current = key;
     setArchivingScope(key);
     setSaving(true);
     try {
-      const preview = await previewProjectRequestsArchive(API_URL, project, requestType);
+      const preview = await previewProjectRequestsArchive(API_URL, project, requestType, department);
       if (!preview.eligibleCount) {
         showToast(`No active ${requestType} records are eligible for Project ${project}`, "warning");
         return;
       }
-      if (!window.confirm(archiveProjectRequestsConfirmation({ project, requestType, count: preview.eligibleCount }))) return;
-      const result = await archiveProjectRequests(API_URL, project, requestType);
-      showToast(`${result.archivedCount} ${requestType} ${result.archivedCount === 1 ? "record" : "records"} archived for Project ${project}`, "success");
+      if (!window.confirm(archiveProjectRequestsConfirmation({ project, requestType, department, count: preview.eligibleCount }))) return;
+      const result = await archiveProjectRequests(API_URL, project, requestType, department);
+      showToast(`${result.archivedCount} ${requestType}${department ? ` — ${department}` : ""} ${result.archivedCount === 1 ? "record" : "records"} archived for Project ${project}`, "success");
       await loadAllData();
     } catch (error) {
       showToast(error.message || "Archive operation failed", "error");

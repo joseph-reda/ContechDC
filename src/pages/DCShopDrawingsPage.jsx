@@ -3,9 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../config";
 import { copyAllRows, copyRow } from "../excelClipboardService";
+import { useNotifications } from "../components/Feedback";
 
 export default function DCShopDrawingsPage() {
   const navigate = useNavigate();
+  const { notify: showToast } = useNotifications();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [shopDrawings, setShopDrawings] = useState([]);
@@ -15,7 +17,6 @@ export default function DCShopDrawingsPage() {
   const [deptFilter, setDeptFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("active");
   const [projects, setProjects] = useState([]);
-  const [toast, setToast] = useState({ show: false, message: "", type: "" });
   const [actionLoading, setActionLoading] = useState(false);
   const archiveOperation = useRef("");
 
@@ -113,11 +114,6 @@ export default function DCShopDrawingsPage() {
 
     setFilteredSD(filtered);
   }, [searchTerm, projectFilter, deptFilter, statusFilter, shopDrawings]);
-
-  const showToast = (message, type = "success") => {
-    setToast({ show: true, message, type });
-    setTimeout(() => setToast({ show: false, message: "", type: "" }), 3000);
-  };
 
   // دالة helper لعرض النوع العام (يتعامل مع البيانات القديمة والجديدة)
   const getGeneralType = (sd) => {
@@ -380,18 +376,6 @@ export default function DCShopDrawingsPage() {
 
   return (
     <main className="shop-drawings-workspace dc-workspace min-h-screen px-4 py-7 lg:px-8">
-      {toast.show && (
-        <div
-          className={`fixed top-5 right-5 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium ${
-            toast.type === "error" ? "bg-red-600" : "bg-green-600"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {toast.type === "error" ? "❌" : "✅"} {toast.message}
-          </div>
-        </div>
-      )}
-
       <div className="max-w-[1536px] mx-auto">
         {/* Header */}
         <header className="shop-drawings-header flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
