@@ -295,7 +295,7 @@ const ProjectsManagementTab = () => {
     <div className="space-y-6">
       {/* Toast */}
       {toast.show && (
-        <div className={`rounded-lg p-4 mb-4 ${toast.type === 'error' ? 'bg-red-100 text-red-700' : toast.type === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+        <div role={toast.type === 'error' ? 'alert' : 'status'} aria-live={toast.type === 'error' ? 'assertive' : 'polite'} aria-atomic="true" className={`rounded-lg p-4 mb-4 ${toast.type === 'error' ? 'bg-red-100 text-red-700' : toast.type === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
           <div className="flex items-center gap-2">
             {toast.type === 'error' ? '❌' : toast.type === 'warning' ? '⚠️' : '✅'}
             {toast.message}
@@ -335,8 +335,9 @@ const ProjectsManagementTab = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Project Name *</label>
+                <label htmlFor="admin-project-name" className="block text-sm font-medium text-gray-700 mb-1">Project Name *</label>
                 <input
+                  id="admin-project-name"
                   type="text"
                   name="name"
                   value={newProject.name}
@@ -347,8 +348,9 @@ const ProjectsManagementTab = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <label htmlFor="admin-project-description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea
+                  id="admin-project-description"
                   name="description"
                   value={newProject.description}
                   onChange={handleInputChange}
@@ -364,8 +366,9 @@ const ProjectsManagementTab = () => {
               <div className="grid grid-cols-2 gap-3">
                 {departments.map(dept => (
                   <div key={dept.id} className="space-y-1">
-                    <label className="text-sm text-gray-600">{dept.name}</label>
+                    <label htmlFor={`admin-project-ir-counter-${dept.id}`} className="text-sm text-gray-600">{dept.name}</label>
                     <input
+                      id={`admin-project-ir-counter-${dept.id}`}
                       type="number"
                       value={newProject.counters[dept.id] || 0}
                       onChange={(e) => handleCounterChange(dept.id, e.target.value)}
@@ -379,8 +382,9 @@ const ProjectsManagementTab = () => {
               <div className="grid grid-cols-2 gap-3">
                 {sdDepartments.map(dept => (
                   <div key={dept.id} className="space-y-1">
-                    <label className="text-sm text-gray-600">{dept.name}</label>
+                    <label htmlFor={`admin-project-sd-counter-${dept.id}`} className="text-sm text-gray-600">{dept.name}</label>
                     <input
+                      id={`admin-project-sd-counter-${dept.id}`}
                       type="number"
                       value={newProject.counters[dept.id] || 0}
                       onChange={(e) => handleCounterChange(dept.id, e.target.value)}
@@ -394,8 +398,9 @@ const ProjectsManagementTab = () => {
               <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
                 {reportCounters.map(counter => (
                   <div key={counter.id} className="space-y-1">
-                    <label className="text-sm text-gray-600">{counter.name}</label>
+                    <label htmlFor={`admin-project-tr-counter-${counter.id}`} className="text-sm text-gray-600">{counter.name}</label>
                     <input
+                      id={`admin-project-tr-counter-${counter.id}`}
                       type="number"
                       value={newProject.counters[counter.id] || 0}
                       onChange={(e) => handleCounterChange(counter.id, e.target.value)}
@@ -616,7 +621,7 @@ const ProjectsManagementTab = () => {
             <div className="text-sm text-gray-600">Total counters</div>
           </div>
           <div className="bg-white border rounded-lg p-4 text-center">
-            <div className="text-2xl font-bold text-purple-600">
+            <div className="text-2xl font-bold text-cyan-700">
               {Object.keys(projects).filter(name => getTotalCounters(projects[name]?.counters) > 0).length}
             </div>
             <div className="text-sm text-gray-600">Active projects</div>

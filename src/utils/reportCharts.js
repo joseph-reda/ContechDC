@@ -1,5 +1,6 @@
 const escapeXml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-const palette = ["#2563eb", "#0e7490", "#15803d", "#b45309", "#7c3aed", "#be123c", "#475569", "#0f766e"];
+// Stable, high-contrast report colors follow the shared operational palette.
+const palette = ["#1769d1", "#0e8397", "#087a58", "#b06f08", "#15528c", "#bf3a46", "#617087", "#16846b"];
 
 function wrap(value, width = 92) {
   const lines = [];
@@ -45,14 +46,14 @@ export function buildChartSvg({ title, values = {}, context = [], timeline = fal
   });
   const plotHeight = timeline ? 260 : Math.max(150, bars.reduce((sum, row) => sum + row.height, 0));
   const height = chartTop + plotHeight + 40;
-  const text = (x, y, value, size = 13, extra = "") => `<text x="${x}" y="${y}" font-size="${size}" fill="#334155" ${extra}>${escapeXml(value)}</text>`;
+  const text = (x, y, value, size = 13, extra = "") => `<text x="${x}" y="${y}" font-size="${size}" fill="#344257" ${extra}>${escapeXml(value)}</text>`;
   let body = "";
   if (timeline && rows.length) {
     const points = rows.map(([, n], i) => [70 + i * 610 / Math.max(rows.length - 1, 1), chartTop + 205 - n / max * 160]);
-    body += `<line x1="70" y1="${chartTop + 205}" x2="705" y2="${chartTop + 205}" stroke="#cbd5e1"/><polyline points="${points.map(p => p.join(",")).join(" ")}" fill="none" stroke="#2563eb" stroke-width="3"/>`;
+    body += `<line x1="70" y1="${chartTop + 205}" x2="705" y2="${chartTop + 205}" stroke="#d8e1ec"/><polyline points="${points.map(p => p.join(",")).join(" ")}" fill="none" stroke="#1769d1" stroke-width="3"/>`;
     rows.forEach(([date, n], i) => {
       const [x, y] = points[i];
-      body += `<circle cx="${x}" cy="${y}" r="4" fill="#2563eb"/>` + text(x, y - 12, n, 12, 'text-anchor="middle"');
+      body += `<circle cx="${x}" cy="${y}" r="4" fill="#1769d1"/>` + text(x, y - 12, n, 12, 'text-anchor="middle"');
       if (i === 0 || i === rows.length - 1 || i % 4 === 0) body += text(x, chartTop + 228, date, 11, 'text-anchor="middle"');
     });
     body += text(35, height - 15, "Last 18 dates with records. Date basis: received date, or submitted date when unavailable.", 11);
@@ -67,7 +68,7 @@ export function buildChartSvg({ title, values = {}, context = [], timeline = fal
     }
   }
   if (!rows.length) body += text(380, chartTop + 70, "No records match these filters", 15, 'text-anchor="middle"');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="760" height="${height}" viewBox="0 0 760 ${height}" role="img" aria-label="${escapeXml(title)}" style="font-family:Arial,sans-serif"><rect width="760" height="${height}" fill="#ffffff"/>${text(30, 32, title, 21, 'font-weight="700"')}${lines.map((line, index) => text(30, 57 + index * 19, line, 12)).join("")}<line x1="30" y1="${chartTop - 12}" x2="730" y2="${chartTop - 12}" stroke="#e2e8f0"/>${body}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="760" height="${height}" viewBox="0 0 760 ${height}" role="img" aria-label="${escapeXml(title)}" style="font-family:Arial,sans-serif"><rect width="760" height="${height}" fill="#ffffff"/>${text(30, 32, title, 21, 'font-weight="700"')}${lines.map((line, index) => text(30, 57 + index * 19, line, 12)).join("")}<line x1="30" y1="${chartTop - 12}" x2="730" y2="${chartTop - 12}" stroke="#d8e1ec"/>${body}</svg>`;
 }
 
 export async function saveChart(svg, filename, format = "png") {

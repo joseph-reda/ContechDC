@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import logo from "../images/Contec.jpg";
 
 function isCurrent(location, to) {
@@ -11,6 +11,8 @@ function isCurrent(location, to) {
 export default function Navbar() {
   const [user, setUser] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuToggleRef = useRef(null);
+  const menuDrawerRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -42,6 +44,40 @@ export default function Navbar() {
     return engineerLinks;
   }, [user]);
 
+  const closeMenu = () => setMenuOpen(false);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    const focusFrame = window.requestAnimationFrame(() => menuDrawerRef.current?.querySelector("a, button")?.focus());
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMenu();
+        return;
+      }
+
+      if (event.key !== "Tab" || !menuDrawerRef.current) return;
+      const focusable = [...menuDrawerRef.current.querySelectorAll("a[href], button:not([disabled])")];
+      const currentIndex = focusable.indexOf(document.activeElement);
+
+      if (event.shiftKey && currentIndex <= 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      } else if (!event.shiftKey && currentIndex === focusable.length - 1) {
+        event.preventDefault();
+        focusable[0]?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+      menuToggleRef.current?.focus();
+    };
+  }, [menuOpen]);
+
   if (!user?.role) return null;
 
   const home = user.role === "admin" ? "/admin" : user.role === "dc" ? "/dc/all" : "/engineer";
@@ -53,7 +89,7 @@ export default function Navbar() {
   };
 
   const navLink = (link, mobile = false) => (
-    <Link key={link.to} to={link.to} className={`${mobile ? "app-nav-mobile-link" : "app-nav-link"} ${isCurrent(location, link.to) ? "is-active" : ""}`}>
+    <Link key={link.to} to={link.to} onClick={mobile ? closeMenu : undefined} className={`${mobile ? "app-nav-mobile-link" : "app-nav-link"} ${isCurrent(location, link.to) ? "is-active" : ""}`}>
       <span className="app-nav-link-mark" aria-hidden="true">{link.short}</span>
       <span>{link.label}</span>
     </Link>
@@ -64,7 +100,7 @@ export default function Navbar() {
       <nav className="app-navigation" aria-label="Main navigation">
         <div className="app-nav-container">
           <div className="app-nav-brand-group">
-            <button type="button" className="app-nav-toggle" aria-label="Toggle navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>
+            <button ref={menuToggleRef} type="button" className="app-nav-toggle" aria-label="Toggle navigation" aria-controls="mobile-navigation-drawer" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>
               <span aria-hidden="true">{menuOpen ? "×" : "☰"}</span>
             </button>
             <Link className="app-nav-brand" to={home} aria-label="Contech dashboard home">
@@ -84,8 +120,8 @@ export default function Navbar() {
       </nav>
 
       {menuOpen && (
-        <div className="app-nav-drawer-backdrop" onClick={() => setMenuOpen(false)}>
-          <aside className="app-nav-drawer" onClick={(event) => event.stopPropagation()} aria-label="Mobile navigation">
+        <div className="app-nav-drawer-backdrop" onClick={closeMenu}>
+          <aside id="mobile-navigation-drawer" ref={menuDrawerRef} className="app-nav-drawer" onClick={(event) => event.stopPropagation()} aria-label="Mobile navigation">
             <div className="app-nav-drawer-user">
               <span className="app-nav-avatar" aria-hidden="true">{String(user.username || "U").slice(0, 1).toUpperCase()}</span>
               <div><strong>{user.username}</strong><small>{user.department || user.role}</small></div>

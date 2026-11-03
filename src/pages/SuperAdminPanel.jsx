@@ -9,11 +9,11 @@ import DCModeTab from "../components/admin/DCModeTab";
 import { API_URL } from "../config";
 
 const TABS = [
-  { id: "dashboard", label: "Dashboard", description: "System overview", icon: "▦", component: DashboardTab },
-  { id: "users", label: "Users", description: "Accounts and access", icon: "♙", component: UsersManagementTab },
-  { id: "projects", label: "Projects", description: "Projects and counters", icon: "□", component: ProjectsManagementTab },
-  { id: "data", label: "Data Setup", description: "Locations and descriptions", icon: "◇", component: DataManagementTab },
-  { id: "dc", label: "DC Workspace", description: "Document control tools", icon: "≡", component: DCModeTab },
+  { id: "dashboard", label: "Dashboard", description: "Priority work and operational status", component: DashboardTab },
+  { id: "users", label: "Users", description: "Accounts, roles, and access", component: UsersManagementTab },
+  { id: "projects", label: "Projects", description: "Project definitions and counters", component: ProjectsManagementTab },
+  { id: "data", label: "Data Setup", description: "Locations, templates, and drawing data", component: DataManagementTab },
+  { id: "dc", label: "DC Workspace", description: "Document-control operations", component: DCModeTab },
 ];
 
 function Toast({ toast, onClose }) {
@@ -24,7 +24,12 @@ function Toast({ toast, onClose }) {
       ? "border-amber-200 bg-amber-50 text-amber-800"
       : "border-emerald-200 bg-emerald-50 text-emerald-800";
   return (
-    <div className={`fixed right-5 top-5 z-50 flex max-w-sm items-center gap-3 rounded-xl border px-4 py-3 shadow-xl ${colors}`}>
+    <div
+      role={toast.type === "error" ? "alert" : "status"}
+      aria-live={toast.type === "error" ? "assertive" : "polite"}
+      aria-atomic="true"
+      className={`fixed right-5 top-5 z-50 flex max-w-sm items-center gap-3 rounded-xl border px-4 py-3 shadow-xl ${colors}`}
+    >
       <span>{toast.type === "error" ? "!" : "✓"}</span>
       <span className="text-sm font-semibold">{toast.message}</span>
       <button type="button" onClick={onClose} className="ml-auto opacity-60 hover:opacity-100" aria-label="Close notification">×</button>
@@ -103,7 +108,7 @@ export default function SuperAdminPanel({ onLogout }) {
       <header className="admin-topbar sticky top-0 z-30 border-b border-slate-800 bg-slate-950 text-white shadow-lg">
         <div className="admin-topbar__inner mx-auto flex max-w-[1600px] items-center gap-4 px-4 py-3 sm:px-6">
           <div className="admin-brandmark grid h-10 w-10 place-items-center rounded-xl bg-cyan-400 font-black text-slate-950">C</div>
-          <div className="min-w-0">
+          <div className="admin-topbar__title min-w-0">
             <p className="truncate font-bold tracking-tight">Contech Control Center</p>
             <p className="text-xs text-slate-400">Administration workspace</p>
           </div>
@@ -115,10 +120,11 @@ export default function SuperAdminPanel({ onLogout }) {
             <p className="text-sm font-semibold">{user?.username}</p>
             <p className="text-xs text-slate-400">Administrator</p>
           </div>
-          <button type="button" onClick={() => navigate("/dc/all")} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium hover:bg-slate-800">
-            DC view
+          <button type="button" onClick={() => navigate("/dc/all")} className="admin-dc-view rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium hover:bg-slate-800" aria-label="Open DC view">
+            <span className="admin-dc-view__compact" aria-hidden="true">DC</span>
+            <span className="admin-dc-view__full" aria-hidden="true">DC view</span>
           </button>
-          <button type="button" onClick={handleLogout} className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
+          <button type="button" onClick={handleLogout} className="admin-logout rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
             Log out
           </button>
         </div>
@@ -138,9 +144,6 @@ export default function SuperAdminPanel({ onLogout }) {
                     activeTab === tab.id ? "bg-slate-950 text-white shadow-md" : "text-slate-600 hover:bg-slate-100"
                   }`}
                 >
-                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg ${activeTab === tab.id ? "bg-cyan-400 text-slate-950" : "bg-slate-100 text-slate-700"}`}>
-                    {tab.icon}
-                  </span>
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold">{tab.label}</span>
                     <span className="block truncate text-xs text-slate-400">{tab.description}</span>
@@ -150,10 +153,10 @@ export default function SuperAdminPanel({ onLogout }) {
             </div>
           </nav>
 
-          <div className="mt-4 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-700 p-4 text-white shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wider text-cyan-100">System</p>
-            <p className="mt-2 text-2xl font-black">v{systemInfo?.version || "2.0.0"}</p>
-            <p className="mt-1 text-xs text-blue-100">{systemInfo?.environment || "development"} environment</p>
+          <div className="admin-system-status mt-4 rounded-2xl p-4">
+            <p className="text-sm font-semibold">System status</p>
+            <p className="mt-2 text-xl font-bold">v{systemInfo?.version || "2.0.0"}</p>
+            <p className="mt-1 text-xs">{systemInfo?.environment || "development"} environment</p>
           </div>
         </aside>
 
@@ -166,21 +169,20 @@ export default function SuperAdminPanel({ onLogout }) {
                 onClick={() => selectTab(tab.id)}
                 className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold ${activeTab === tab.id ? "bg-slate-950 text-white" : "text-slate-600"}`}
               >
-                {tab.icon} {tab.label}
+                {tab.label}
               </button>
             ))}
           </nav>
 
           <div className="admin-page-heading mb-5 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Admin / {activeItem.label}</p>
-              <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">{activeItem.label}</h1>
+              <h1 className="text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">{activeItem.label}</h1>
               <p className="mt-1 text-sm text-slate-500">{activeItem.description}</p>
             </div>
             <p className="text-xs text-slate-400">Secure admin session · {systemInfo?.database || "SQLite"}</p>
           </div>
 
-          <section className="admin-content rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6" aria-live="polite">
+          <section className="admin-content rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
             <ActiveComponent />
           </section>
         </main>

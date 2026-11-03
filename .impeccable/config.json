@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "createdAt": "2026-11-03T09:14:00.118Z",
+        "reason": "Domain-appropriate fallback for exported SVG report charts in src/utils/reportCharts.js; not the product display typeface."
+      }
+    ]
+  }
+}

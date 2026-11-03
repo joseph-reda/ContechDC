@@ -109,7 +109,7 @@ const RevisionChip = memo(({ rev, onMarkDone, onArchive }) => {
   const time = rev.sentAt ? new Date(rev.sentAt).toLocaleTimeString() : "";
 
   return (
-    <div className="p-4 rounded-lg border-l-4 border-amber-500 bg-amber-50 hover:shadow-md transition-shadow">
+    <div className="p-4 rounded-lg border border-amber-200 bg-amber-50 hover:shadow-md transition-shadow">
       <div className="flex justify-between items-start mb-3">
         <div className="flex gap-1 flex-wrap">
           <span className={`text-xs font-semibold px-2 py-1 rounded ${revTypeClass}`}>
@@ -318,7 +318,7 @@ const ProjectSection = memo(({
   const sortedDepts = Object.keys(depts).sort();
 
   return (
-    <section className="bg-white rounded-2xl shadow-lg border overflow-hidden  w-[1500px]">
+    <section className="w-full min-w-0 overflow-hidden rounded-2xl border bg-white shadow-lg">
       <div className="bg-gradient-to-r from-slate-800 to-slate-700 text-white p-6">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
@@ -387,7 +387,7 @@ const ProjectSection = memo(({
                     </h4>
                   </div>
                   <div className="overflow-x-auto rounded-lg border border-green-200">
-                    <table className="w-full">
+                    <table className="min-w-[820px] w-full">
                       <thead className="bg-green-700 text-white">
                         <tr>
                           <th className="p-3 text-left">Number</th>
@@ -448,7 +448,7 @@ const ProjectSection = memo(({
                     </h4>
                   </div>
                   <div className="overflow-x-auto rounded-lg border border-blue-200">
-                    <table className="w-full">
+                    <table className="min-w-[820px] w-full">
                       <thead className="bg-blue-700 text-white">
                         <tr>
                           <th className="p-3 text-left">Number</th>
@@ -531,12 +531,20 @@ export default function DCModeTab({ user }) {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [editingReferencesItem, setEditingReferencesItem] = useState(null);
   const [referencesDraft, setReferencesDraft] = useState("");
+  const referencesDialogRef = useRef(null);
+  const referencesTextareaRef = useRef(null);
+  const referencesReturnFocusRef = useRef(null);
+  const irNumberDialogRef = useRef(null);
+  const detailsDialogRef = useRef(null);
   const [updatingIRNumber, setUpdatingIRNumber] = useState({
     uniqueId: "",
     irNo: "",
     newSerial: "",
     showModal: false,
   });
+
+  const closeIrNumberDialog = () => setUpdatingIRNumber({ uniqueId: "", irNo: "", newSerial: "", showModal: false });
+  const closeDetailsDialog = () => setShowDetailsModal(false);
 
   // Projects list for filter
   const [projects, setProjects] = useState([]);
@@ -1026,10 +1034,82 @@ export default function DCModeTab({ user }) {
 
   const openReferencesEditor = (item) => {
     const existing = item.refDrawings || item.refSD || item.SDAttatch || [];
+    referencesReturnFocusRef.current = document.activeElement;
     setEditingReferencesItem(item);
     setReferencesDraft((Array.isArray(existing) ? existing : String(existing).split(/[\r\n,;]+/)).join("\n"));
     setShowDetailsModal(false);
   };
+
+  const closeReferencesEditor = () => {
+    setEditingReferencesItem(null);
+    setReferencesDraft("");
+  };
+
+  useEffect(() => {
+    if (!editingReferencesItem) return undefined;
+
+    const initialFocusFrame = window.requestAnimationFrame(() => referencesTextareaRef.current?.focus());
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeReferencesEditor();
+        return;
+      }
+
+      if (event.key !== "Tab" || !referencesDialogRef.current) return;
+      const focusable = [...referencesDialogRef.current.querySelectorAll("textarea:not([disabled]), button:not([disabled])")];
+      const currentIndex = focusable.indexOf(document.activeElement);
+
+      if (event.shiftKey && currentIndex <= 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      } else if (!event.shiftKey && currentIndex === focusable.length - 1) {
+        event.preventDefault();
+        focusable[0]?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(initialFocusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      const returnFocus = referencesReturnFocusRef.current;
+      if (returnFocus?.isConnected) returnFocus.focus();
+    };
+  }, [editingReferencesItem]);
+
+  useEffect(() => {
+    const dialog = updatingIRNumber.showModal ? irNumberDialogRef.current : showDetailsModal ? detailsDialogRef.current : null;
+    if (!dialog) return undefined;
+
+    const returnFocus = document.activeElement;
+    const focusFirst = () => dialog.querySelector("[data-dialog-initial-focus], button:not([disabled]), input:not([disabled]), textarea:not([disabled])")?.focus();
+    const frame = window.requestAnimationFrame(focusFirst);
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (updatingIRNumber.showModal) closeIrNumberDialog();
+        else closeDetailsDialog();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [...dialog.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
+      const currentIndex = focusable.indexOf(document.activeElement);
+      if (event.shiftKey && currentIndex <= 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      } else if (!event.shiftKey && currentIndex === focusable.length - 1) {
+        event.preventDefault();
+        focusable[0]?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      if (returnFocus?.isConnected) returnFocus.focus();
+    };
+  }, [updatingIRNumber.showModal, showDetailsModal]);
 
   const handleSaveReferences = async () => {
     if (!editingReferencesItem) return;
@@ -1043,8 +1123,7 @@ export default function DCModeTab({ user }) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "References could not be saved");
-      setEditingReferencesItem(null);
-      setReferencesDraft("");
+      closeReferencesEditor();
       await loadAllData();
       showToast("Ref Drawings saved. You can now download the Word file.", "success");
     } catch (error) {
@@ -1190,16 +1269,18 @@ export default function DCModeTab({ user }) {
               }}
               className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded"
               title="Details"
+              aria-label={`View details for ${item.irNo || item.revNo || item.sdNo}`}
             >
               👁️
             </button>
 
             {/* Download Word (for IR/CPR or SD) */}
-            {!isRevision && !isSD && <button onClick={() => openReferencesEditor(item)} className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded" title="Edit Ref Drawings / SD Attach">📎</button>}
+            {!isRevision && !isSD && <button onClick={() => openReferencesEditor(item)} className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded" title="Edit Ref Drawings / SD Attach" aria-label={`Edit drawing references for ${item.irNo}`}>📎</button>}
             <button
               onClick={() => handleDownloadWord(item)}
               className="p-2 text-green-600 hover:text-green-800 hover:bg-green-100 rounded"
               title="Download Word"
+              aria-label={`Download Word for ${item.irNo || item.revNo || item.sdNo}`}
             >
               📄
             </button>
@@ -1210,6 +1291,7 @@ export default function DCModeTab({ user }) {
                 onClick={() => setUpdatingIRNumber({ uniqueId: item.uniqueId || item.id, irNo: item.irNo, newSerial: "", showModal: true })}
                 className="p-2 text-purple-600 hover:text-purple-800 hover:bg-purple-100 rounded"
                 title="Update IR Number"
+                aria-label={`Update serial number for ${item.irNo}`}
               >
                 🔢
               </button>
@@ -1302,6 +1384,9 @@ export default function DCModeTab({ user }) {
       {/* Toast */}
       {toast.show && (
         <div
+          role={toast.type === "error" ? "alert" : "status"}
+          aria-live={toast.type === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
           className={`fixed top-5 right-5 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium ${
             toast.type === "error"
               ? "bg-red-600"
@@ -1387,11 +1472,11 @@ export default function DCModeTab({ user }) {
             <div className="text-2xl">🗄️</div>
           </div>
         </div>
-        <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+        <div className="bg-sky-50 border border-sky-200 rounded-xl p-4">
           <div className="flex justify-between items-center">
             <div>
-              <p className="text-sm text-purple-700">Shop Drawings</p>
-              <p className="text-2xl font-bold text-purple-800">{stats.sdTotal}</p>
+              <p className="text-sm text-sky-700">Shop Drawings</p>
+              <p className="text-2xl font-bold text-sky-900">{stats.sdTotal}</p>
             </div>
             <div className="text-2xl">📐</div>
           </div>
@@ -1505,27 +1590,27 @@ export default function DCModeTab({ user }) {
             <span className="text-sm text-gray-600">Active filters:</span>
             {searchTerm && (
               <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full flex items-center gap-1">
-                Search: "{searchTerm}" <button onClick={() => setSearchTerm("")}>×</button>
+                Search: "{searchTerm}" <button type="button" onClick={() => setSearchTerm("")} aria-label={`Clear search filter: ${searchTerm}`}>×</button>
               </span>
             )}
             {projectFilter !== "all" && (
               <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full flex items-center gap-1">
-                Project: {projectFilter} <button onClick={() => setProjectFilter("all")}>×</button>
+                Project: {projectFilter} <button type="button" onClick={() => setProjectFilter("all")} aria-label={`Clear project filter: ${projectFilter}`}>×</button>
               </span>
             )}
             {departmentFilter !== "all" && (
               <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full flex items-center gap-1">
-                Dept: {departmentFilter} <button onClick={() => setDepartmentFilter("all")}>×</button>
+                Dept: {departmentFilter} <button type="button" onClick={() => setDepartmentFilter("all")} aria-label={`Clear department filter: ${departmentFilter}`}>×</button>
               </span>
             )}
             {typeFilter !== "all" && (
               <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs rounded-full flex items-center gap-1">
-                Type: {typeFilter} <button onClick={() => setTypeFilter("all")}>×</button>
+                Type: {typeFilter} <button type="button" onClick={() => setTypeFilter("all")} aria-label={`Clear type filter: ${typeFilter}`}>×</button>
               </span>
             )}
             {statusFilter !== "all" && (
               <span className="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full flex items-center gap-1">
-                Status: {statusFilter} <button onClick={() => setStatusFilter("all")}>×</button>
+                Status: {statusFilter} <button type="button" onClick={() => setStatusFilter("all")} aria-label={`Clear status filter: ${statusFilter}`}>×</button>
               </span>
             )}
             <button
@@ -1608,26 +1693,28 @@ export default function DCModeTab({ user }) {
         )}
       </div>
 
-      {editingReferencesItem && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Edit Ref Drawings">
+      {editingReferencesItem && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="edit-reference-drawings-title" aria-describedby="edit-reference-drawings-help" ref={referencesDialogRef}>
         <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
-          <h3 className="text-xl font-bold">Edit Ref Drawings / SD Attach</h3>
-          <p className="mt-1 text-sm text-gray-600">{editingReferencesItem.irNo} · One reference per line. Word export adds this request’s project and discipline.</p>
-          <textarea value={referencesDraft} onChange={(event) => setReferencesDraft(event.target.value)} rows={7} className="mt-4 w-full rounded-lg border p-3 font-mono text-sm" />
-          <div className="mt-4 flex justify-end gap-2"><button onClick={() => setEditingReferencesItem(null)} className="rounded-lg border px-4 py-2">Cancel</button><button disabled={saving} onClick={handleSaveReferences} className="rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Save references</button></div>
+          <h3 id="edit-reference-drawings-title" className="text-xl font-bold">Edit Ref Drawings / SD Attach</h3>
+          <p id="edit-reference-drawings-help" className="mt-1 text-sm text-gray-600">{editingReferencesItem.irNo} · One reference per line. Word export adds this request’s project and discipline.</p>
+          <label htmlFor="edit-reference-drawings" className="mt-4 block text-sm font-semibold text-gray-700">Drawing references</label>
+          <textarea ref={referencesTextareaRef} id="edit-reference-drawings" value={referencesDraft} onChange={(event) => setReferencesDraft(event.target.value)} rows={7} className="mt-2 w-full rounded-lg border p-3 font-mono text-sm" />
+          <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={closeReferencesEditor} className="rounded-lg border px-4 py-2">Cancel</button><button type="button" disabled={saving} onClick={handleSaveReferences} className="rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Save references</button></div>
         </div>
       </div>}
 
       {/* Update IR Number Modal */}
       {updatingIRNumber.showModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in">
-            <div className="bg-gradient-to-r from-purple-600 to-purple-700 p-6 text-white">
-              <h3 className="text-xl font-bold">🔢 Update IR Number</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" role="presentation">
+          <div ref={irNumberDialogRef} role="dialog" aria-modal="true" aria-labelledby="update-ir-number-title" className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in">
+            <div className="dc-number-modal__heading p-6 text-white">
+              <h3 id="update-ir-number-title" className="text-xl font-bold">Update IR Number</h3>
             </div>
             <div className="p-6">
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Current IR Number</label>
+                <label htmlFor="current-ir-number" className="block text-sm font-medium text-gray-700 mb-2">Current IR Number</label>
                 <input
+                  id="current-ir-number"
                   type="text"
                   value={updatingIRNumber.irNo}
                   readOnly
@@ -1635,8 +1722,10 @@ export default function DCModeTab({ user }) {
                 />
               </div>
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">New Serial Number *</label>
+                <label htmlFor="new-ir-serial-number" className="block text-sm font-medium text-gray-700 mb-2">New Serial Number *</label>
                 <input
+                  id="new-ir-serial-number"
+                  data-dialog-initial-focus
                   type="number"
                   value={updatingIRNumber.newSerial}
                   onChange={(e) => setUpdatingIRNumber((prev) => ({ ...prev, newSerial: e.target.value }))}
@@ -1647,7 +1736,7 @@ export default function DCModeTab({ user }) {
               </div>
               <div className="flex justify-end gap-3">
                 <button
-                  onClick={() => setUpdatingIRNumber({ uniqueId: "", irNo: "", newSerial: "", showModal: false })}
+                  onClick={closeIrNumberDialog}
                   className="px-4 py-2 bg-gray-300 hover:bg-gray-400 rounded-lg"
                 >
                   Cancel
@@ -1667,15 +1756,15 @@ export default function DCModeTab({ user }) {
 
       {/* Item Details Modal */}
       {showDetailsModal && selectedItem && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" role="presentation">
+          <div ref={detailsDialogRef} role="dialog" aria-modal="true" aria-labelledby="document-details-title" className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in max-h-[90vh] flex flex-col">
             <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
               <div className="flex justify-between items-center">
                 <div>
-                  <h3 className="text-xl font-bold">Details</h3>
+                  <h3 id="document-details-title" className="text-xl font-bold">Details</h3>
                   <p className="text-blue-100 text-sm mt-1">{selectedItem.irNo || selectedItem.revNo || selectedItem.sdNo}</p>
                 </div>
-                <button onClick={() => setShowDetailsModal(false)} className="text-2xl hover:opacity-70">
+                <button type="button" data-dialog-initial-focus onClick={closeDetailsDialog} className="text-2xl hover:opacity-70" aria-label="Close details">
                   &times;
                 </button>
               </div>
@@ -1685,7 +1774,7 @@ export default function DCModeTab({ user }) {
             </div>
             <div className="bg-gray-50 p-6 border-t flex justify-end gap-3">
               <button
-                onClick={() => setShowDetailsModal(false)}
+                onClick={closeDetailsDialog}
                 className="px-4 py-2 bg-gray-300 hover:bg-gray-400 rounded-lg"
               >
                 Close

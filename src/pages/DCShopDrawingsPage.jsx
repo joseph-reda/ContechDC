@@ -478,25 +478,25 @@ export default function DCShopDrawingsPage() {
               {searchTerm && (
                 <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full">
                   Search: {searchTerm}{" "}
-                  <button onClick={() => setSearchTerm("")}>×</button>
+                  <button type="button" onClick={() => setSearchTerm("")} aria-label={`Clear search filter: ${searchTerm}`}>×</button>
                 </span>
               )}
               {projectFilter !== "all" && (
                 <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
                   Project: {projectFilter}{" "}
-                  <button onClick={() => setProjectFilter("all")}>×</button>
+                  <button type="button" onClick={() => setProjectFilter("all")} aria-label={`Clear project filter: ${projectFilter}`}>×</button>
                 </span>
               )}
               {deptFilter !== "all" && (
                 <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
                   Dept: {deptFilter}{" "}
-                  <button onClick={() => setDeptFilter("all")}>×</button>
+                  <button type="button" onClick={() => setDeptFilter("all")} aria-label={`Clear department filter: ${deptFilter}`}>×</button>
                 </span>
               )}
               {statusFilter !== "all" && (
                 <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs rounded-full">
                   Status: {statusFilter}{" "}
-                  <button onClick={() => setStatusFilter("active")}>×</button>
+                  <button type="button" onClick={() => setStatusFilter("active")} aria-label={`Clear status filter: ${statusFilter}`}>×</button>
                 </span>
               )}
               <button

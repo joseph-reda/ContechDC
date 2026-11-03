@@ -834,15 +834,15 @@ export default function EngineerPage({ fixedRequestType = "" }) {
   const NextNumberPreview = () => {
     const nextNumber = getNextNumberPreview();
     if (requestType !== "sd" && loadingNumberPreview) {
-      return <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50 p-4"><LoadingIndicator label="Calculating the authoritative next number…" /></div>;
+      return <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4"><LoadingIndicator label="Calculating the authoritative next number…" /></div>;
     }
     if (requestType !== "sd" && numberPreviewError) {
       return <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">Could not preview the next number: {numberPreviewError}</div>;
     }
     if (!nextNumber) return null;
     return (
-      <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg shadow-sm">
-        <p className="text-sm font-medium text-purple-700 mb-1 flex items-center gap-2">
+      <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm">
+        <p className="mb-1 flex items-center gap-2 text-sm font-medium text-blue-700">
           <span>🔢</span> Next number will be:
         </p>
         <p className="font-mono font-bold text-lg text-gray-800 break-all">
@@ -877,7 +877,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
           <div>
             <h1 className={`text-4xl font-bold ${
               requestType === "cpr" ? "text-green-600" :
-              requestType === "sd" ? "text-purple-600" : "text-blue-600"
+              requestType === "sd" ? "text-cyan-700" : "text-blue-600"
             }`}>
               {requestType === "cpr" ? "🏗️ Concrete Pouring Request (CPR)" :
                requestType === "sd" ? "📐 Shop Drawing" :
@@ -888,7 +888,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
               <span className="text-gray-600">Logged in as:</span>
               <span className={`font-bold text-lg px-3 py-1 rounded-full ${
                 requestType === "cpr" ? "bg-green-100 text-green-800" :
-                requestType === "sd" ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
+                requestType === "sd" ? "bg-cyan-100 text-cyan-800" : "bg-blue-100 text-blue-800"
               }`}>
                 {user.username}
               </span>
@@ -913,7 +913,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
             {allowedTypes.includes("sd") && (
               <button onClick={() => switchRequestType("SD")}
                 className={`px-6 py-2.5 rounded-lg font-medium transition-all ${
-                  requestType === "sd" ? "bg-purple-600 text-white shadow-md" : "hover:bg-gray-100 text-gray-600"
+                  requestType === "sd" ? "bg-cyan-700 text-white shadow-md" : "hover:bg-gray-100 text-gray-600"
                 }`}>📐 Shop Drawing</button>
             )}
           </div>
@@ -935,8 +935,8 @@ export default function EngineerPage({ fixedRequestType = "" }) {
           /* نموذج Shop Drawing */
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              <h2 className="text-xl font-bold text-purple-600 mb-6 flex items-center gap-2">
-                <span className="w-1.5 h-8 bg-purple-600 rounded-full"></span>
+              <h2 className="mb-6 flex items-center gap-2 text-xl font-bold text-cyan-700">
+                <span className="h-8 w-1.5 rounded-full bg-cyan-700"></span>
                 📐 Shop Drawing Details
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -973,7 +973,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
                       onClick={() => handleAddProtoType(type)}
                       className={`px-3 py-1 rounded-full text-sm ${
                         protoTypes.some(p => p.type === type)
-                          ? "bg-purple-600 text-white"
+                          ? "bg-cyan-700 text-white"
                           : "bg-gray-200 text-gray-700 hover:bg-gray-300"
                       }`}
                     >
@@ -986,16 +986,16 @@ export default function EngineerPage({ fixedRequestType = "" }) {
                     {protoTypes.map((item) => (
                       <div key={item.type} className="p-3 border rounded bg-gray-50">
                         <div className="flex justify-between items-center mb-2">
-                          <span className="font-bold text-purple-700">{item.type}</span>
+                          <span className="font-bold text-cyan-800">{item.type}</span>
                           <button onClick={() => handleRemoveProtoType(item.type)} className="text-red-600 hover:text-red-800 text-sm">✕ Remove Type</button>
                         </div>
                         <div className="mb-2">
                           <label className="block text-sm text-gray-600 mb-1">Selected Levels:</label>
                           <div className="flex flex-wrap gap-2">
                             {item.levels.map(level => (
-                              <span key={level} className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm">
+                              <span key={level} className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-3 py-1 text-sm text-cyan-800">
                                 {level}
-                                <button onClick={() => handleRemoveLevel(item.type, level)} className="text-purple-600 hover:text-purple-800">×</button>
+                                <button type="button" onClick={() => handleRemoveLevel(item.type, level)} className="text-cyan-700 hover:text-cyan-900" aria-label={`Remove level ${level} from ${item.type}`}>×</button>
                               </span>
                             ))}
                             {item.levels.length === 0 && <span className="text-sm text-gray-400 italic">No levels selected</span>}
@@ -1029,7 +1029,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
               {isRevision && (
                 <div className="mt-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Original Shop Drawing Number *</label>
-                  <input type="text" value={parentSdNo} onChange={(e) => setParentSdNo(e.target.value)} className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-purple-500" placeholder="e.g., BA-CON-A6-SD-ARCH-Prototype-A1-SU-001" />
+                  <input type="text" value={parentSdNo} onChange={(e) => setParentSdNo(e.target.value)} className="w-full rounded-lg border p-3 focus:ring-2 focus:ring-cyan-600" placeholder="e.g., BA-CON-A6-SD-ARCH-Prototype-A1-SU-001" />
                 </div>
               )}
 
@@ -1037,7 +1037,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
               <div className="mt-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-semibold text-gray-800">Sheets</h3>
-                  <button type="button" onClick={handleAddSheet} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm">+ Add Sheet</button>
+                  <button type="button" onClick={handleAddSheet} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm text-white hover:bg-cyan-800">+ Add Sheet</button>
                 </div>
                 <div className="overflow-x-auto" style={{ overflow: 'visible' }}>
                   <table className="w-full border">
@@ -1126,7 +1126,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
 
             <button onClick={handleSave} disabled={saving || !selectedProject || !sdSubject}
               className={`w-full py-5 rounded-xl text-white font-bold text-lg shadow-xl transition-all transform hover:-translate-y-1 ${
-                saving || !selectedProject || !sdSubject ? "bg-gray-400 cursor-not-allowed" : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700"
+                saving || !selectedProject || !sdSubject ? "bg-gray-400 cursor-not-allowed" : "bg-blue-700 hover:bg-blue-800"
               }`}>
               {saving ? <LoadingIndicator label="Submitting shop drawing…" compact inverse /> : "📐 Submit Shop Drawing"}
             </button>
@@ -1217,7 +1217,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
 
             {/* Tags Section */}
             <div className="engineer-form-panel bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2"><span className="w-1.5 h-8 bg-purple-600 rounded-full"></span>Attachments & References</h2>
+              <h2 className="mb-2 flex items-center gap-2 text-xl font-bold text-gray-800"><span className="h-8 w-1.5 rounded-full bg-cyan-700"></span>Attachments & References</h2>
               <p className="mb-6 text-sm text-slate-500">Keep general IR attachments separate from controlled drawing references used in the document.</p>
               <div className={`grid grid-cols-1 gap-6 ${requestType === "cpr" ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
                 <div className="space-y-3">
@@ -1302,7 +1302,7 @@ export default function EngineerPage({ fixedRequestType = "" }) {
                 requestType === "cpr" ? "bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700" :
                 requestType === "ppir" ? "bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700" :
                 requestType === "tr" ? "bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700" :
-                "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
+                "bg-blue-700 hover:bg-blue-800"
               }`}>
               {saving ? <LoadingIndicator label="Submitting request…" compact inverse /> : requestType === "cpr" ? "🏗️ Submit CPR Request" :
                requestType === "ppir" ? "🧱 Submit PPIR" :

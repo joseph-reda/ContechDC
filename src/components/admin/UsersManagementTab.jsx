@@ -316,6 +316,9 @@ const UsersManagementTab = () => {
       {/* Toast Notification */}
       {toast.show && (
         <div
+          role={toast.type === "error" ? "alert" : "status"}
+          aria-live={toast.type === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
           className={`rounded-lg p-4 mb-4 ${
             toast.type === "error" ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"
           }`}
@@ -364,10 +367,11 @@ const UsersManagementTab = () => {
             <form onSubmit={handleSaveUser} className="space-y-4">
               {/* Role comes first because it controls the rest of the form. */}
               <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                <label className="block text-sm font-bold text-blue-950 mb-1">
+                <label htmlFor="admin-user-role" className="block text-sm font-bold text-blue-950 mb-1">
                   1. Account Role *
                 </label>
                 <select
+                  id="admin-user-role"
                   name="role"
                   value={userForm.role}
                   onChange={handleInputChange}
@@ -388,10 +392,11 @@ const UsersManagementTab = () => {
 
               {/* Username */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="admin-user-username" className="block text-sm font-medium text-gray-700 mb-1">
                   2. Username *
                 </label>
                 <input
+                  id="admin-user-username"
                   type="text"
                   name="username"
                   value={userForm.username}
@@ -400,15 +405,17 @@ const UsersManagementTab = () => {
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                   placeholder="Enter username"
                   required
+                  autoComplete="username"
                 />
               </div>
 
               {/* Optional phone */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="admin-user-mobile" className="block text-sm font-medium text-gray-700 mb-1">
                   Mobile Number <span className="font-normal text-gray-400">(optional)</span>
                 </label>
                 <input
+                  id="admin-user-mobile"
                   type="tel"
                   name="phone"
                   value={userForm.phone}
@@ -422,10 +429,11 @@ const UsersManagementTab = () => {
 
               {/* Password */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="admin-user-password" className="block text-sm font-medium text-gray-700 mb-1">
                   Password {!editingUser && "*"}
                 </label>
                 <input
+                  id="admin-user-password"
                   type="password"
                   name="password"
                   value={userForm.password}
@@ -433,6 +441,7 @@ const UsersManagementTab = () => {
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   placeholder={editingUser ? "Leave blank to keep current" : "Minimum 6 characters"}
                   minLength={userForm.password ? 6 : undefined}
+                  autoComplete={editingUser ? "new-password" : "new-password"}
                 />
                 <p className="mt-1 text-xs text-gray-500">Minimum 6 characters.</p>
               </div>
@@ -440,10 +449,11 @@ const UsersManagementTab = () => {
               {/* Confirm Password */}
               {userForm.password && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="admin-user-confirm-password" className="block text-sm font-medium text-gray-700 mb-1">
                     Confirm Password *
                   </label>
                   <input
+                    id="admin-user-confirm-password"
                     type="password"
                     name="confirmPassword"
                     value={userForm.confirmPassword}
@@ -451,6 +461,7 @@ const UsersManagementTab = () => {
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                     placeholder="Confirm password"
                     minLength={6}
+                    autoComplete="new-password"
                   />
                 </div>
               )}
@@ -458,10 +469,11 @@ const UsersManagementTab = () => {
               {userForm.role === "engineer" && (
                 <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label htmlFor="admin-user-department" className="block text-sm font-medium text-gray-700 mb-1">
                       Department *
                     </label>
                     <select
+                      id="admin-user-department"
                       name="department"
                       value={userForm.department}
                       onChange={handleInputChange}

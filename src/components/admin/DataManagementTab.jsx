@@ -804,7 +804,7 @@ export default function DataManagementTab() {
     <div className="p-6">
       {/* Toast */}
       {toast.show && (
-        <div className={`fixed top-5 right-5 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium ${
+        <div role={toast.type === "error" ? "alert" : "status"} aria-live={toast.type === "error" ? "assertive" : "polite"} aria-atomic="true" className={`fixed top-5 right-5 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium ${
           toast.type === "error" ? "bg-red-600" : toast.type === "warning" ? "bg-amber-600" : "bg-green-600"
         }`}>
           <div className="flex items-center gap-2">
@@ -815,8 +815,8 @@ export default function DataManagementTab() {
 
       {/* Header */}
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-800 mb-2">🗃️ Data Management</h2>
-        <p className="text-gray-600">Manage location rules, Word checklists, general descriptions, sheet titles, and subject titles</p>
+        <h2 className="text-2xl font-bold text-gray-800 mb-2">Data setup</h2>
+        <p className="text-gray-600">Choose the type of document data you want to maintain. Changes affect future request forms and generated files.</p>
       </div>
 
       {/* Tab navigation */}
@@ -831,11 +831,11 @@ export default function DataManagementTab() {
                 : "text-gray-600 hover:text-gray-800"
             }`}
           >
-            {section === "location_rules" && "📍 Location Rules"}
-            {section === "checklists" && "☑ Word Checklists"}
-            {section === "descriptions" && "📝 General Descriptions"}
-            {section === "subjects" && "📌 SD Submittal Subject"}
-            {section === "sheets" && "📄 Drawing List"}
+            {section === "location_rules" && "Request locations"}
+            {section === "checklists" && "Word checklists"}
+            {section === "descriptions" && "Request descriptions"}
+            {section === "subjects" && "Shop drawing subjects"}
+            {section === "sheets" && "Drawing lists"}
           </button>
         ))}
       </div>
@@ -859,7 +859,7 @@ export default function DataManagementTab() {
                     const rules = locationRules[projectName]?.rules || [];
                     const hasRules = rules.length > 0;
                     return (
-                      <div
+        <div
                         key={projectName}
                         className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
                           editingProjectRules.project === projectName ? "border-blue-500 bg-blue-50" : "border-gray-200"
